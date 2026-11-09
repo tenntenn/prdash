@@ -19,10 +19,10 @@ When an agent session loads this skill and starts `prdash`, that agent session s
 
 ## Starting the Dashboard
 
-Run `prdash` from the repository root:
+Run `prdash` from the repository root (pass `-state` to synchronize state with MCP tool invocations):
 
 ```bash
-go run github.com/tenntenn/prdash -repo owner/name
+go run github.com/tenntenn/prdash -repo owner/name -state /tmp/prdash-state.json
 ```
 
 - `prdash` automatically binds an available local TCP port and prints the URL on stdout:
@@ -36,7 +36,7 @@ go run github.com/tenntenn/prdash -repo owner/name
 `prdash` also runs as a standard JSON-RPC 2.0 MCP server over stdio, sharing the exact same core `prdash.Service` implementation:
 
 ```bash
-go run github.com/tenntenn/prdash -mcp -repo owner/name
+go run github.com/tenntenn/prdash -mcp -repo owner/name -state /tmp/prdash-state.json
 ```
 
 ### Available MCP Tools
@@ -46,6 +46,9 @@ go run github.com/tenntenn/prdash -mcp -repo owner/name
 | `get_dashboard` | Retrieve the full repository snapshot (PRs, stacks, sessions, worktrees, model presets, notifications). |
 | `list_prs` | List pull requests filtered by `status` (`waiting_for_human` or `working`) or `stack_id`. |
 | `get_pr` | Inspect a single PR and its full session conversation thread. |
+| `upsert_worktree` | Register or update a git worktree bound to an agent session. |
+| `upsert_session` | Register or update a worker session bound to a git worktree. |
+| `upsert_pr` | Register or update a pull request managed by an agent session. |
 | `send_pr_message` | Send an instruction to the session responsible for a specific PR. |
 | `post_sbnn_comment` | Post a code review comment through the `sbnn` integration boundary. |
 | `request_review` | Run an automated review on a PR via `sbnn`. |

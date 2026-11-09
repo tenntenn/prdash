@@ -330,6 +330,27 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		}
 		return map[string]any{"ok": true}, nil
 
+	case "upsert_worktree":
+		var wt Worktree
+		if err := json.Unmarshal(rawArgs, &wt); err != nil {
+			return nil, err
+		}
+		return svc.UpsertWorktree(wt)
+
+	case "upsert_session":
+		var sess Session
+		if err := json.Unmarshal(rawArgs, &sess); err != nil {
+			return nil, err
+		}
+		return svc.UpsertSession(sess)
+
+	case "upsert_pr":
+		var pr PullRequest
+		if err := json.Unmarshal(rawArgs, &pr); err != nil {
+			return nil, err
+		}
+		return svc.UpsertPR(pr)
+
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -522,6 +543,62 @@ func mcpToolsList() []mcpTool {
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{"type": "string", "description": "Notification ID or 'all'"},
+				},
+			},
+		},
+		{
+			Name:        "upsert_worktree",
+			Description: "Register or update a git worktree bound to an agent session.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"id", "path", "branch"},
+				"properties": map[string]any{
+					"id":         map[string]any{"type": "string"},
+					"path":       map[string]any{"type": "string"},
+					"branch":     map[string]any{"type": "string"},
+					"head_sha":   map[string]any{"type": "string"},
+					"clean":      map[string]any{"type": "boolean"},
+					"session_id": map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			Name:        "upsert_session",
+			Description: "Register or update a worker session bound to a git worktree.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"id", "name"},
+				"properties": map[string]any{
+					"id":                  map[string]any{"type": "string"},
+					"name":                map[string]any{"type": "string"},
+					"worktree_id":         map[string]any{"type": "string"},
+					"status":              map[string]any{"type": "string"},
+					"model_tier":          map[string]any{"type": "string"},
+					"subagent_model_tier": map[string]any{"type": "string"},
+					"active_task":         map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			Name:        "upsert_pr",
+			Description: "Register or update a pull request managed by an agent session.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"number", "title", "branch", "session_id", "worktree_id"},
+				"properties": map[string]any{
+					"number":           map[string]any{"type": "integer"},
+					"title":            map[string]any{"type": "string"},
+					"description":      map[string]any{"type": "string"},
+					"branch":           map[string]any{"type": "string"},
+					"base_branch":      map[string]any{"type": "string"},
+					"session_id":       map[string]any{"type": "string"},
+					"worktree_id":      map[string]any{"type": "string"},
+					"stack_id":         map[string]any{"type": "string"},
+					"stack_order":      map[string]any{"type": "integer"},
+					"parent_pr_number": map[string]any{"type": "integer"},
+					"status":           map[string]any{"type": "string"},
+					"auto_mode":        map[string]any{"type": "boolean"},
+					"model_tier":       map[string]any{"type": "string"},
 				},
 			},
 		},

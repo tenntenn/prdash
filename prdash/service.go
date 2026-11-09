@@ -1251,3 +1251,170 @@ func (s *Service) MarkNotificationRead(id string) error {
 	s.broadcast(snap)
 	return nil
 }
+
+// UpsertWorktree registers a new git worktree or updates an existing worktree by ID.
+func (s *Service) UpsertWorktree(wt Worktree) (Worktree, error) {
+	wt.ID = strings.TrimSpace(wt.ID)
+	if wt.ID == "" {
+		return Worktree{}, errors.New("worktree id is required")
+	}
+	if strings.TrimSpace(wt.Branch) == "" {
+		wt.Branch = "main"
+	}
+
+	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
+	found := false
+	for i := range s.worktrees {
+		if s.worktrees[i].ID == wt.ID {
+			s.worktrees[i] = wt
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.worktrees = append(s.worktrees, wt)
+	}
+	snap := s.snapshotLocked()
+	s.mu.Unlock()
+
+	s.broadcast(snap)
+	return wt, nil
+}
+
+// UpsertSession registers a new worker session or updates an existing session by ID.
+func (s *Service) UpsertSession(sess Session) (Session, error) {
+	sess.ID = strings.TrimSpace(sess.ID)
+	if sess.ID == "" {
+		return Session{}, errors.New("session id is required")
+	}
+	if sess.ModelTier == "" {
+		sess.ModelTier = TierBamboo
+	}
+	if !ValidModelTier(sess.ModelTier) {
+		return Session{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, sess.ModelTier)
+	}
+	if sess.SubagentModelTier == "" {
+		sess.SubagentModelTier = TierPlum
+	}
+	if !ValidModelTier(sess.SubagentModelTier) {
+		return Session{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, sess.SubagentModelTier)
+	}
+
+	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
+	now := time.Now().UTC()
+	sess.Role = "worker"
+	if strings.TrimSpace(sess.Name) == "" {
+		sess.Name = sess.ID
+	}
+	if strings.TrimSpace(sess.Status) == "" {
+		sess.Status = "working"
+	}
+	sess.ResolvedModel = s.modelConfig.Resolve(sess.ModelTier)
+	sess.ResolvedSubagentModel = s.modelConfig.Resolve(sess.SubagentModelTier)
+	sess.UpdatedAt = now
+
+	existing, idx := s.findSessionLocked(sess.ID)
+	if existing != nil && idx >= 0 {
+		if len(sess.Messages) == 0 {
+			sess.Messages = existing.Messages
+		}
+		s.sessions[idx] = sess
+	} else {
+		s.sessions = append(s.sessions, sess)
+	}
+
+	res := cloneSession(sess)
+	snap := s.snapshotLocked()
+	s.mu.Unlock()
+
+	s.broadcast(snap)
+	return res, nil
+}
+
+// UpsertPR registers a new pull request or updates an existing pull request by number.
+func (s *Service) UpsertPR(in PullRequest) (PullRequest, error) {
+	if in.Number <= 0 {
+		return PullRequest{}, errors.New("pull request number must be positive")
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return PullRequest{}, errors.New("pull request title is required")
+	}
+	if in.Status == "" {
+		in.Status = StatusWorking
+	}
+	if in.Status != StatusWaitingForHuman && in.Status != StatusWorking {
+		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidPRStatus, in.Status)
+	}
+	if in.ModelTier == "" {
+		in.ModelTier = TierBamboo
+	}
+	if !ValidModelTier(in.ModelTier) {
+		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, in.ModelTier)
+	}
+
+	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
+	now := time.Now().UTC()
+
+	if in.ID == "" {
+		in.ID = fmt.Sprintf("pr-%d", in.Number)
+	}
+	if in.BaseBranch == "" {
+		in.BaseBranch = s.repo.DefaultBranch
+	}
+	if in.CIStatus == "" {
+		in.CIStatus = "passing"
+	}
+	if in.ReviewStatus == "" {
+		in.ReviewStatus = "review_pending"
+	}
+	in.ResolvedModel = s.modelConfig.Resolve(in.ModelTier)
+	in.UpdatedAt = now
+
+	existing, idx := s.findPRLocked(in.Number)
+	var prevStatus PRStatus
+	if existing != nil && idx >= 0 {
+		prevStatus = existing.Status
+		if len(in.Thread) == 0 {
+			in.Thread = existing.Thread
+		}
+		s.prs[idx] = in
+	} else {
+		if len(in.Thread) == 0 {
+			in.Thread = []ThreadMessage{
+				{
+					ID:        s.nextID("msg"),
+					Author:    in.SessionID,
+					Role:      "session",
+					Kind:      "status_change",
+					Text:      fmt.Sprintf("Registered PR #%d (%s) in prdash.", in.Number, in.Title),
+					CreatedAt: now,
+				},
+			}
+		}
+		s.prs = slices.Insert(s.prs, 0, in)
+	}
+
+	if in.Status == StatusWaitingForHuman && prevStatus != StatusWaitingForHuman {
+		s.emitNotificationLocked(
+			&in,
+			prevStatus,
+			StatusWaitingForHuman,
+			fmt.Sprintf("PR #%d is Waiting for Human", in.Number),
+			fmt.Sprintf("PR #%d (%s) is ready for human review.", in.Number, in.Title),
+			now,
+		)
+	}
+
+	res := clonePR(in)
+	snap := s.snapshotLocked()
+	s.mu.Unlock()
+
+	s.broadcast(snap)
+	return res, nil
+}
