@@ -12,18 +12,18 @@ tasks:
   run:
     desc: Start the local prdash web dashboard
     cmds:
-      - go run {{.MODULE}} {{.CLI_ARGS}}
+      - aqua exec -- go run {{.MODULE}} {{.CLI_ARGS}}
 
   mcp:
     desc: Start the prdash MCP server over stdio
     silent: true
     cmds:
-      - go run {{.MODULE}} -mcp {{.CLI_ARGS}}
+      - aqua exec -- go run {{.MODULE}} -mcp {{.CLI_ARGS}}
 
   build:
     desc: Build the prdash binary
     cmds:
-      - go build -buildvcs=true -o '{{.ROOT_DIR}}/prdash-bin' {{.MODULE}}
+      - aqua exec -- go build -buildvcs=true -o '{{.ROOT_DIR}}/prdash-bin' {{.MODULE}}
 
   fmt:
     desc: Format Go source files with goimports via aqua
@@ -33,19 +33,19 @@ tasks:
   fix:
     desc: Apply go fix and format source files
     cmds:
-      - go fix {{.MODULE}}/...
+      - aqua exec -- go fix {{.MODULE}}/...
       - task: fmt
 
   lint:
     desc: Run go vet static analysis
     cmds:
-      - go vet {{.MODULE}}/...
+      - aqua exec -- go vet {{.MODULE}}/...
 
   test:
     desc: Format and run tests with race detector enabled
     cmds:
       - task: fmt
-      - go test -race {{.MODULE}}/...
+      - aqua exec -- go test -race {{.MODULE}}/...
 
   check:
     desc: Run fix, lint, and test sequentially
