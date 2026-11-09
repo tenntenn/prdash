@@ -355,6 +355,48 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
+	mux.HandleFunc("POST /api/worktrees", func(w http.ResponseWriter, r *http.Request) {
+		var wt Worktree
+		if err := decodeJSON(r, &wt); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		updated, err := svc.UpsertWorktree(wt)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	})
+
+	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		var sess Session
+		if err := decodeJSON(r, &sess); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		updated, err := svc.UpsertSession(sess)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	})
+
+	mux.HandleFunc("POST /api/prs", func(w http.ResponseWriter, r *http.Request) {
+		var pr PullRequest
+		if err := decodeJSON(r, &pr); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		updated, err := svc.UpsertPR(pr)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	})
+
 	mux.Handle("/", fileServer)
 	return mux
 }

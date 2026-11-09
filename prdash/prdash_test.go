@@ -416,3 +416,58 @@ func TestStateFileSynchronization(t *testing.T) {
 		t.Fatalf("expected webSvc to observe status %s, got %s", prdash.StatusWaitingForHuman, pr109.Status)
 	}
 }
+
+func TestUpsertWorktreeSessionAndPR(t *testing.T) {
+	t.Parallel()
+
+	svc := prdash.NewService(prdash.Options{Repository: "tenntenn/prdash"})
+
+	wt, err := svc.UpsertWorktree(prdash.Worktree{
+		ID:        "wt-dogfood",
+		Path:      "/workspace/repos/prdash",
+		Branch:    "feat/dynamic-registration",
+		HeadSHA:   "a719dfd",
+		Clean:     true,
+		SessionID: "sess-dogfood",
+	})
+	if err != nil {
+		t.Fatalf("UpsertWorktree: %v", err)
+	}
+	if wt.ID != "wt-dogfood" {
+		t.Fatalf("unexpected worktree id: %s", wt.ID)
+	}
+
+	sess, err := svc.UpsertSession(prdash.Session{
+		ID:                "sess-dogfood",
+		Name:              "Session Dogfood (Self-Host)",
+		WorktreeID:        "wt-dogfood",
+		ModelTier:         prdash.TierPine,
+		SubagentModelTier: prdash.TierBamboo,
+		ActiveTask:        "Implementing dynamic entity registration for dogfooding",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSession: %v", err)
+	}
+	if sess.ResolvedModel != "claude-opus-4-6" {
+		t.Fatalf("unexpected resolved model: %s", sess.ResolvedModel)
+	}
+
+	pr, err := svc.UpsertPR(prdash.PullRequest{
+		Number:      10,
+		Title:       "Support registering and updating worktrees, sessions, and pull requests",
+		Description: "Adds UpsertWorktree, UpsertSession, and UpsertPR across Service, HTTP API, and MCP.",
+		Branch:      "feat/dynamic-registration",
+		BaseBranch:  "main",
+		SessionID:   "sess-dogfood",
+		WorktreeID:  "wt-dogfood",
+		Status:      prdash.StatusWaitingForHuman,
+		AutoMode:    true,
+		ModelTier:   prdash.TierPine,
+	})
+	if err != nil {
+		t.Fatalf("UpsertPR: %v", err)
+	}
+	if pr.Number != 10 || pr.Status != prdash.StatusWaitingForHuman {
+		t.Fatalf("unexpected PR state: %+v", pr)
+	}
+}
