@@ -1,0 +1,9 @@
+registries:
+  - type: standard
+    ref: v4.552.0 # renovate: depName=aquaproj/aqua-registry
+
+packages:
+  - name: vercel-labs/agent-browser@v0.36.0
+  - name: go-task/task@v3.52.0
+  - name: golang/go@go1.27.1
+  - name: golang/tools/goimports@v0.49.0

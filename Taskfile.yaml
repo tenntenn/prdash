@@ -1,0 +1,70 @@
+version: '3'
+
+vars:
+  MODULE: github.com/tenntenn/prdash
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  run:
+    desc: Start the local prdash web dashboard
+    cmds:
+      - go run {{.MODULE}} {{.CLI_ARGS}}
+
+  mcp:
+    desc: Start the prdash MCP server over stdio
+    silent: true
+    cmds:
+      - go run {{.MODULE}} -mcp {{.CLI_ARGS}}
+
+  build:
+    desc: Build the prdash binary
+    cmds:
+      - go build -buildvcs=true -o '{{.ROOT_DIR}}/prdash-bin' {{.MODULE}}
+
+  fmt:
+    desc: Format Go source files with goimports via aqua
+    cmds:
+      - aqua exec -- goimports -local {{.MODULE}} -w '{{.ROOT_DIR}}'
+
+  fix:
+    desc: Apply go fix and format source files
+    cmds:
+      - go fix {{.MODULE}}/...
+      - task: fmt
+
+  lint:
+    desc: Run go vet static analysis
+    cmds:
+      - go vet {{.MODULE}}/...
+
+  test:
+    desc: Format and run tests with race detector enabled
+    cmds:
+      - task: fmt
+      - go test -race {{.MODULE}}/...
+
+  check:
+    desc: Run fix, lint, and test sequentially
+    cmds:
+      - task: fix
+      - task: lint
+      - task: test
+
+  repo:
+    desc: Run git commands
+    cmds:
+      - git {{.CLI_ARGS}}
+
+  gh:
+    desc: Run GitHub CLI commands
+    cmds:
+      - gh {{.CLI_ARGS}}
+
+  ui:browser:
+    desc: Run agent-browser commands for UI inspection
+    cmds:
+      - agent-browser --session prdash-check {{.CLI_ARGS}}
