@@ -1,6 +1,8 @@
 (() => {
   let state = null;
   let activeFilter = "all";
+  let activeSessionFilter = "";
+  let desktopAlertsEnabled = false;
   const openPRs = new Set();
   const openSessionLogs = new Set();
   const seenNotifications = new Set();
@@ -46,6 +48,11 @@
   }
 
   function showToast(title, message) {
+    if (desktopAlertsEnabled && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(title, { body: message });
+      } catch (_) {}
+    }
     const container = document.getElementById("toast-container");
     if (!container) return;
     const toast = document.createElement("div");
@@ -167,6 +174,19 @@
   }
 
   function renderWorkerSessionsPanel() {
+    const sessionSelect = document.getElementById("session-filter");
+    if (sessionSelect) {
+      const currentVal = activeSessionFilter;
+      const opts = [`<option value="">All Sessions / Worktrees</option>`];
+      for (const s of state.sessions || []) {
+        opts.push(
+          `<option value="${escapeHTML(s.id)}" ${s.id === currentVal ? "selected" : ""}>${escapeHTML(
+            s.name
+          )} · ${escapeHTML(s.worktree_id)}</option>`
+        );
+      }
+      sessionSelect.innerHTML = opts.join("");
+    }
     const container = document.getElementById("worker-sessions-list");
     const sessions = state.sessions || [];
     container.innerHTML = sessions
@@ -223,6 +243,9 @@
   }
 
   function prMatchesFilter(pr) {
+    if (activeSessionFilter && pr.session_id !== activeSessionFilter) {
+      return false;
+    }
     if (activeFilter === "waiting_for_human") {
       return pr.status === "waiting_for_human";
     }
@@ -450,6 +473,17 @@
       return;
     }
 
+    if (e.target.id === "enable-desktop-alerts") {
+      if ("Notification" in window && Notification.permission !== "granted") {
+        try {
+          await Notification.requestPermission();
+        } catch (_) {}
+      }
+      desktopAlertsEnabled = !desktopAlertsEnabled;
+      e.target.textContent = desktopAlertsEnabled ? "Browser Alerts: ON" : "Enable Browser Alerts";
+      return;
+    }
+
     if (e.target.id === "open-model-settings") {
       const dlg = document.getElementById("model-settings-dialog");
       if (state && state.model_config) {
@@ -524,6 +558,12 @@
   );
 
   document.addEventListener("change", async (e) => {
+    if (e.target.id === "session-filter") {
+      activeSessionFilter = e.target.value;
+      renderPRList();
+      return;
+    }
+
     if (e.target.matches("[data-auto-toggle]")) {
       const prNum = Number(e.target.dataset.autoToggle);
       const enabled = e.target.checked;

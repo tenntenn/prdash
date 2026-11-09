@@ -40,6 +40,9 @@
         <span class="summary-label">Auto-Mode ON</span>
         <strong class="summary-value" id="stat-automode">0</strong>
       </div>
+      <button type="button" class="btn btn-ghost" id="enable-desktop-alerts">
+        Enable Browser Alerts
+      </button>
       <button type="button" class="btn btn-secondary" id="open-model-settings">
         Model Presets (Pine / Bamboo / Plum)
       </button>
@@ -56,6 +59,9 @@
           <button type="button" class="filter-btn" data-filter="waiting_for_human">Waiting for Human</button>
           <button type="button" class="filter-btn" data-filter="working">Agent Working</button>
           <button type="button" class="filter-btn" data-filter="stacked">Stacked Only</button>
+          <select id="session-filter" class="select-compact" aria-label="Filter by session">
+            <option value="">All Sessions / Worktrees</option>
+          </select>
         </div>
         <div class="toolbar-actions">
           <button type="button" class="btn btn-ghost" id="expand-all-prs">Expand All</button>
