@@ -68,3 +68,43 @@ tasks:
     desc: Run agent-browser commands for UI inspection
     cmds:
       - agent-browser --session prdash-check {{.CLI_ARGS}}
+
+  ui:check:
+    desc: Verify the web dashboard UI in a headless browser
+    requires:
+      vars: [URL]
+    cmds:
+      - agent-browser --session prdash-check open '{{.URL}}'
+      - >-
+        agent-browser --session prdash-check eval '
+        (async () => {
+          const wait = async (fn) => {
+            for (let i = 0; i < 150; i++) {
+              if (fn()) return;
+              await new Promise((r) => setTimeout(r, 40));
+            }
+            throw new Error("timeout");
+          };
+          await wait(() => document.querySelectorAll("[data-pr-card]").length === 9);
+          if (document.querySelectorAll(".pr-details[open]").length !== 0) {
+            throw new Error("PR details must be collapsed by default");
+          }
+          const stack = document.querySelector("[data-stack-group=\"stack-oauth\"]");
+          if (!stack || !stack.textContent.includes("#101 → #102 → #103")) {
+            throw new Error("3-tier stack chain not rendered");
+          }
+          const pr107Details = document.querySelector("[data-pr-details=\"107\"]");
+          pr107Details.querySelector("summary").click();
+          await wait(() => pr107Details.open);
+          pr107Details.querySelector("[data-routine=\"107\"][data-action=\"resolve_conflicts\"]").click();
+          await wait(() => document.querySelector("[data-pr-status-badge=\"107\"]").textContent.includes("Waiting for Human"));
+          const ctrlInput = document.querySelector("#controller-input");
+          ctrlInput.value = "Summarize stack progress";
+          document.querySelector("#controller-form").requestSubmit();
+          await wait(() => document.querySelector("#controller-messages").textContent.includes("Summarize stack progress"));
+          if (document.documentElement.scrollWidth > window.innerWidth) {
+            throw new Error("horizontal overflow detected");
+          }
+          return "PASS: default collapsed, 3-tier stack, routine action transition, notification, controller session";
+        })()'
+      - agent-browser --session prdash-check close
