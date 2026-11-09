@@ -390,3 +390,29 @@ func TestMCPServer(t *testing.T) {
 		t.Fatal("expected PR #107 conflicts to be resolved via MCP tool call")
 	}
 }
+
+func TestStateFileSynchronization(t *testing.T) {
+	t.Parallel()
+
+	statePath := t.TempDir() + "/prdash-state.json"
+	webSvc := prdash.NewService(prdash.Options{
+		Repository: "acme/nebula-api",
+		StateFile:  statePath,
+	})
+	mcpSvc := prdash.NewService(prdash.Options{
+		Repository: "acme/nebula-api",
+		StateFile:  statePath,
+	})
+
+	if _, err := mcpSvc.ReportSessionResult("sess-delta", 109, prdash.StatusWaitingForHuman, "Fixed idempotency test race via MCP"); err != nil {
+		t.Fatalf("ReportSessionResult: %v", err)
+	}
+
+	pr109, err := webSvc.GetPR(109)
+	if err != nil {
+		t.Fatalf("webSvc.GetPR(109): %v", err)
+	}
+	if pr109.Status != prdash.StatusWaitingForHuman {
+		t.Fatalf("expected webSvc to observe status %s, got %s", prdash.StatusWaitingForHuman, pr109.Status)
+	}
+}

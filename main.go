@@ -19,6 +19,7 @@ func main() {
 	var (
 		addr      = flag.String("addr", "127.0.0.1:0", "HTTP listen address (defaults to an automatically assigned free port)")
 		repo      = flag.String("repo", "acme/nebula-api", "Target repository in owner/name format")
+		stateFile = flag.String("state", "", "Optional JSON file path to synchronize state between Web and MCP processes")
 		mcpMode   = flag.Bool("mcp", false, "Run as a Model Context Protocol (MCP) server over stdio")
 		pineModel = flag.String("model-pine", "claude-opus-4-6", "Model identifier for the Pine (High) preset")
 		bambooMod = flag.String("model-bamboo", "claude-sonnet-4-6", "Model identifier for the Bamboo (Standard) preset")
@@ -28,6 +29,7 @@ func main() {
 
 	svc := prdash.NewService(prdash.Options{
 		Repository: *repo,
+		StateFile:  *stateFile,
 		ModelConfig: &prdash.ModelPresetConfig{
 			Pine:   *pineModel,
 			Bamboo: *bambooMod,
@@ -44,6 +46,10 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	if *stateFile != "" {
+		go svc.WatchStateFile(ctx, 250*time.Millisecond)
 	}
 
 	ln, err := net.Listen("tcp", *addr)
