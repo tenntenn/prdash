@@ -24,6 +24,7 @@ var (
 // Options configures a new Service instance.
 type Options struct {
 	Repository  string
+	StateFile   string
 	ModelConfig *ModelPresetConfig
 	Reviewer    SBNNReviewer
 }
@@ -33,6 +34,9 @@ type Options struct {
 type Service struct {
 	mu          sync.RWMutex
 	seq         atomic.Int64
+	stateFile   string
+	stateRev    int64
+	dirty       bool
 	repo        RepositoryInfo
 	modelConfig ModelPresetConfig
 	reviewer    SBNNReviewer
@@ -69,6 +73,7 @@ func NewService(opts Options) *Service {
 
 	controller, worktrees, sessions, prs, notifications := seedData(repo, models)
 	svc := &Service{
+		stateFile:     strings.TrimSpace(opts.StateFile),
 		repo:          repo,
 		modelConfig:   models,
 		reviewer:      reviewer,
@@ -80,6 +85,11 @@ func NewService(opts Options) *Service {
 		subscribers:   make(map[int64]chan Snapshot),
 	}
 	svc.seq.Store(1000)
+	if svc.stateFile != "" {
+		if !svc.reloadStateFileIfChangedLocked() {
+			svc.saveStateFileLocked()
+		}
+	}
 	return svc
 }
 
@@ -121,12 +131,22 @@ func (s *Service) broadcast(snap Snapshot) {
 
 // Snapshot returns a deep copy of the current dashboard state.
 func (s *Service) Snapshot() Snapshot {
+	if s.stateFile != "" {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.reloadStateFileIfChangedLocked()
+		return s.snapshotLocked()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.snapshotLocked()
 }
 
 func (s *Service) snapshotLocked() Snapshot {
+	if s.dirty {
+		s.saveStateFileLocked()
+		s.dirty = false
+	}
 	controller := cloneSession(s.controller)
 	worktrees := slices.Clone(s.worktrees)
 	sessions := make([]Session, len(s.sessions))
@@ -243,6 +263,8 @@ func buildStackGroups(prs []PullRequest) []StackGroup {
 }
 
 func (s *Service) findPRLocked(number int) (*PullRequest, int) {
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
 	for i := range s.prs {
 		if s.prs[i].Number == number {
 			return &s.prs[i], i
@@ -252,6 +274,8 @@ func (s *Service) findPRLocked(number int) (*PullRequest, int) {
 }
 
 func (s *Service) findSessionLocked(id string) (*Session, int) {
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
 	if s.controller.ID == id || id == "controller" {
 		return &s.controller, -1
 	}
@@ -304,19 +328,22 @@ func (s *Service) recordInterSessionLocked(from, to, direction string, prNumber 
 
 // GetPR returns a single pull request by number.
 func (s *Service) GetPR(number int) (PullRequest, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	pr, _ := s.findPRLocked(number)
-	if pr == nil {
-		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reloadStateFileIfChangedLocked()
+	for i := range s.prs {
+		if s.prs[i].Number == number {
+			return clonePR(s.prs[i]), nil
+		}
 	}
-	return clonePR(*pr), nil
+	return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, number)
 }
 
 // ListPRs returns pull requests optionally filtered by status or stack ID.
 func (s *Service) ListPRs(statusFilter string, stackID string) []PullRequest {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reloadStateFileIfChangedLocked()
 	var out []PullRequest
 	for _, pr := range s.prs {
 		if statusFilter != "" && string(pr.Status) != statusFilter {
@@ -424,14 +451,15 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 		return PullRequest{}, ErrEmptyMessage
 	}
 
-	s.mu.RLock()
-	prCopy, _ := s.findPRLocked(prNumber)
-	if prCopy == nil {
-		s.mu.RUnlock()
-		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
+	prCopy, err := s.GetPR(prNumber)
+	if err != nil {
+		return PullRequest{}, err
 	}
+	s.mu.RLock()
+	repoFullName := s.repo.FullName
+	s.mu.RUnlock()
 	req := SBNNCommentRequest{
-		Repository: s.repo.FullName,
+		Repository: repoFullName,
 		PRNumber:   prCopy.Number,
 		Branch:     prCopy.Branch,
 		Worktree:   prCopy.WorktreeID,
@@ -439,7 +467,6 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 		Line:       line,
 		Body:       body,
 	}
-	s.mu.RUnlock()
 
 	result, err := s.reviewer.SubmitComment(ctx, req)
 	if err != nil {
@@ -511,21 +538,21 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 
 // RequestReview runs an automated review via the sbnn integration boundary and updates the PR thread.
 func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string) (PullRequest, error) {
-	s.mu.RLock()
-	prCopy, _ := s.findPRLocked(prNumber)
-	if prCopy == nil {
-		s.mu.RUnlock()
-		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
+	prCopy, err := s.GetPR(prNumber)
+	if err != nil {
+		return PullRequest{}, err
 	}
+	s.mu.RLock()
+	repoFullName := s.repo.FullName
+	s.mu.RUnlock()
 	req := SBNNReviewRequest{
-		Repository: s.repo.FullName,
+		Repository: repoFullName,
 		PRNumber:   prCopy.Number,
 		Branch:     prCopy.Branch,
 		BaseBranch: prCopy.BaseBranch,
 		Worktree:   prCopy.WorktreeID,
 		Focus:      strings.TrimSpace(focus),
 	}
-	s.mu.RUnlock()
 
 	reviewRes, err := s.reviewer.RunReview(ctx, req)
 	if err != nil {
@@ -1011,6 +1038,8 @@ func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, err
 // UpdateModelConfig updates the concrete model names mapped to the Pine, Bamboo, and Plum presets.
 func (s *Service) UpdateModelConfig(cfg ModelPresetConfig) (ModelPresetConfig, error) {
 	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
 	if strings.TrimSpace(cfg.Pine) != "" {
 		s.modelConfig.Pine = strings.TrimSpace(cfg.Pine)
 	}
@@ -1077,6 +1106,8 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	}
 
 	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
 	now := time.Now().UTC()
 	userMsg := SessionMessage{
 		ID:        s.nextID("cmsg"),
@@ -1191,6 +1222,8 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 // MarkNotificationRead marks a single notification or all notifications ("all") as read.
 func (s *Service) MarkNotificationRead(id string) error {
 	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
 	if id == "all" || id == "" {
 		for i := range s.notifications {
 			s.notifications[i].Read = true
