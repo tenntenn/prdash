@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>prdash — Agent PR Command Center</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-logo">PR</div>
+      <div>
+        <div class="brand-title-row">
+          <h1 class="brand-title">prdash</h1>
+          <span class="brand-subtitle">Agent PR Command Center</span>
+        </div>
+        <div class="repo-context" id="repo-context">
+          <span class="repo-badge" id="repo-full-name">acme/nebula-api</span>
+          <span class="repo-meta" id="repo-branch">default: main</span>
+          <span class="repo-meta" id="repo-path">/workspace/repos/nebula-api</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-strip" id="summary-strip">
+      <div class="summary-chip waiting">
+        <span class="summary-label">Waiting for Human</span>
+        <strong class="summary-value" id="stat-waiting">0</strong>
+      </div>
+      <div class="summary-chip working">
+        <span class="summary-label">Agent Working</span>
+        <strong class="summary-value" id="stat-working">0</strong>
+      </div>
+      <div class="summary-chip neutral">
+        <span class="summary-label">Stacked Chains</span>
+        <strong class="summary-value" id="stat-stacks">0</strong>
+      </div>
+      <div class="summary-chip neutral">
+        <span class="summary-label">Auto-Mode ON</span>
+        <strong class="summary-value" id="stat-automode">0</strong>
+      </div>
+      <button type="button" class="btn btn-secondary" id="open-model-settings">
+        Model Presets (Pine / Bamboo / Plum)
+      </button>
+    </div>
+  </header>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <main class="workspace">
+    <section class="main-column" aria-label="Pull Requests">
+      <div class="toolbar">
+        <div class="filter-group" role="tablist" aria-label="Filter pull requests">
+          <button type="button" class="filter-btn active" data-filter="all">All PRs</button>
+          <button type="button" class="filter-btn" data-filter="waiting_for_human">Waiting for Human</button>
+          <button type="button" class="filter-btn" data-filter="working">Agent Working</button>
+          <button type="button" class="filter-btn" data-filter="stacked">Stacked Only</button>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" class="btn btn-ghost" id="expand-all-prs">Expand All</button>
+          <button type="button" class="btn btn-ghost" id="collapse-all-prs">Collapse All</button>
+        </div>
+      </div>
+
+      <div id="pr-list" class="pr-list"></div>
+    </section>
+
+    <aside class="side-column" aria-label="Sessions and Notifications">
+      <!-- Dashboard Controller Session Panel -->
+      <section class="panel controller-panel" id="controller-panel">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">Dashboard Session</span>
+            <h2 class="panel-title" id="controller-name">Dashboard Orchestrator</h2>
+          </div>
+          <span class="session-role-badge">Controller</span>
+        </div>
+        <p class="controller-task" id="controller-task"></p>
+
+        <div class="tier-row">
+          <label class="tier-label">
+            <span>Session Model</span>
+            <select id="controller-model-tier" class="select-compact">
+              <option value="pine">Pine (High)</option>
+              <option value="bamboo">Bamboo (Standard)</option>
+              <option value="plum">Plum (Fast)</option>
+            </select>
+          </label>
+          <label class="tier-label">
+            <span>Subagent Model</span>
+            <select id="controller-subagent-tier" class="select-compact">
+              <option value="pine">Pine (High)</option>
+              <option value="bamboo">Bamboo (Standard)</option>
+              <option value="plum">Plum (Fast)</option>
+            </select>
+          </label>
+        </div>
+        <div class="resolved-model-hint" id="controller-resolved-model"></div>
+
+        <form id="controller-form" class="instruction-form">
+          <label for="controller-input" class="sr-only">Instruction to Dashboard Session</label>
+          <input
+            id="controller-input"
+            type="text"
+            placeholder="Send instruction to the dashboard session..."
+            required
+          >
+          <button type="submit" class="btn btn-primary">Instruct</button>
+        </form>
+
+        <div class="message-feed compact" id="controller-messages"></div>
+      </section>
+
+      <!-- Human Notifications Panel -->
+      <section class="panel notifications-panel" id="notifications-panel">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">State Transition Alerts</span>
+            <h2 class="panel-title">
+              Notifications
+              <span class="unread-pill" id="unread-count">0</span>
+            </h2>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="mark-notifications-read">Mark all read</button>
+        </div>
+        <div class="notification-list" id="notification-list"></div>
+      </section>
+
+      <!-- Worker Sessions & Worktrees Panel -->
+      <section class="panel sessions-panel" id="sessions-panel">
+        <div class="panel-header">
+          <div>
+            <span class="eyebrow">Worktree-Bound Agents</span>
+            <h2 class="panel-title">Worker Sessions &amp; Worktrees</h2>
+          </div>
+        </div>
+        <div id="worker-sessions-list" class="worker-sessions-list"></div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- Model Preset Mapping Dialog -->
+  <dialog id="model-settings-dialog" class="modal">
+    <form id="model-settings-form" class="modal-card">
+      <div class="modal-header">
+        <h2>3-Tier Model Preset Configuration</h2>
+        <button type="button" class="btn btn-ghost btn-sm" id="close-model-settings">Close</button>
+      </div>
+      <p class="modal-desc">
+        Configure which concrete model identifiers correspond to the three preset tiers across sessions and subagents.
+      </p>
+      <div class="form-field">
+        <label for="preset-pine">
+          <strong>Pine (Matsu — High Capability / High Cost)</strong>
+        </label>
+        <input id="preset-pine" type="text" required>
+      </div>
+      <div class="form-field">
+        <label for="preset-bamboo">
+          <strong>Bamboo (Take — Standard / Balanced)</strong>
+        </label>
+        <input id="preset-bamboo" type="text" required>
+      </div>
+      <div class="form-field">
+        <label for="preset-plum">
+          <strong>Plum (Ume — Lightweight / Low Cost)</strong>
+        </label>
+        <input id="preset-plum" type="text" required>
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary">Save Model Mapping</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
