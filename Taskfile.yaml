@@ -69,6 +69,32 @@ tasks:
     cmds:
       - agent-browser --session prdash-check {{.CLI_ARGS}}
 
+  ui:docs:
+    desc: Capture documentation screenshots using synthetic repository data
+    cmds:
+      - task: build
+      - mkdir -p '{{.ROOT_DIR}}/docs/screenshots'
+      - >-
+        bash -c '
+          export XDG_RUNTIME_DIR=/tmp/prdash-browser-runtime
+          export AGENT_BROWSER_ARGS="--no-sandbox"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          "{{.ROOT_DIR}}/prdash-bin" -addr 127.0.0.1:18765 -repo acme/nebula-api > /tmp/prdash-docs.log 2>&1 &
+          SRV_PID=$!
+          trap "kill $SRV_PID 2>/dev/null || true; agent-browser --session prdash-docs close 2>/dev/null || true" EXIT
+          for i in $(seq 1 50); do
+            if grep -q "prdash listening" /tmp/prdash-docs.log; then break; fi
+            sleep 0.1
+          done
+          agent-browser --session prdash-docs open http://127.0.0.1:18765
+          agent-browser --session prdash-docs set viewport 1440 920
+          agent-browser --session prdash-docs eval "new Promise(r => setTimeout(r, 400))"
+          agent-browser --session prdash-docs screenshot "{{.ROOT_DIR}}/docs/screenshots/dashboard-overview.png"
+          agent-browser --session prdash-docs eval "document.querySelector(\"[data-pr-details=\\\"101\\\"] summary\").click(); document.querySelector(\"[data-pr-details=\\\"102\\\"] summary\").click();"
+          agent-browser --session prdash-docs eval "new Promise(r => setTimeout(r, 300))"
+          agent-browser --session prdash-docs screenshot "{{.ROOT_DIR}}/docs/screenshots/pr-detail-expanded.png"
+        '
+
   ui:check:
     desc: Verify the web dashboard UI in a headless browser
     requires:
