@@ -274,3 +274,37 @@ func TestHTTPRejectsMalformedOptionalBodies(t *testing.T) {
 		})
 	}
 }
+
+func TestHTTPInstructionRoutesRequireAuthentication(t *testing.T) {
+	cases := []string{"ack", "claim", "result", "retry"}
+	for _, action := range cases {
+		t.Run(action, func(t *testing.T) {
+			svc := instructionService(t, "")
+			msg := queueInstruction(t, svc, "protected instruction")
+			handler := prdash.NewHandler(svc)
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/sessions/worker/instructions/"+msg.ID+"/"+action, strings.NewReader(`{}`))
+			req.RemoteAddr = "127.0.0.1:12345"
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated %s status = %d, want 401", action, rec.Code)
+			}
+			got, err := svc.GetInstruction("worker", msg.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := json.Marshal(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("unauthenticated request changed instruction state")
+			}
+		})
+	}
+}

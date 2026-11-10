@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,8 +195,7 @@ func TestConfigWebAndMCP(t *testing.T) {
 	root := configRepo(t)
 	writeRepoConfig(t, root, "review:\n  agent: sample-agent\n")
 	svc := prdash.NewService(prdash.Options{WorkDir: root})
-	rec := httptest.NewRecorder()
-	prdash.NewHandler(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	rec := authenticatedHTTP(t, prdash.NewHandler(svc), http.MethodGet, "/api/state", "")
 	var snap prdash.Snapshot
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
@@ -261,8 +259,7 @@ func TestConfigReloadEndpoints(t *testing.T) {
 	root := configRepo(t)
 	svc := prdash.NewService(prdash.Options{WorkDir: root})
 	writeRepoConfig(t, root, "review:\n  agent: sample-http\n")
-	rec := httptest.NewRecorder()
-	prdash.NewHandler(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/config/reload", nil))
+	rec := authenticatedHTTP(t, prdash.NewHandler(svc), http.MethodPost, "/api/config/reload", `{}`)
 	if rec.Code != http.StatusOK || svc.EffectiveConfig().Config.Review.Agent != "sample-http" {
 		t.Fatalf("HTTP reload: %d %s", rec.Code, rec.Body.String())
 	}
@@ -276,8 +273,7 @@ func TestConfigReloadEndpoints(t *testing.T) {
 		t.Fatalf("MCP reload=%s", output.String())
 	}
 	writeRepoConfig(t, root, "unknown: value\n")
-	rec = httptest.NewRecorder()
-	prdash.NewHandler(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/config/reload", nil))
+	rec = authenticatedHTTP(t, prdash.NewHandler(svc), http.MethodPost, "/api/config/reload", `{}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad reload status=%d", rec.Code)
 	}
