@@ -113,7 +113,7 @@ Identical result resends are safe, but execution is not exactly-once. A stale
 result is retained without applying PR status to a newer instruction/head/session.
 Legacy `report` is an uncorrelated status report and does not acknowledge queued
 instructions. Do not use bulk ack or independent state-file writers for parallel
-execution. See the README's instruction lifecycle for the complete contract.
+execution. See the integration reference's instruction lifecycle for the complete contract.
 
 ### Available MCP Tools
 
