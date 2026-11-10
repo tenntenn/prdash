@@ -45,6 +45,12 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 {
 		switch args[0] {
+		case "register":
+			return runRegisterCmd(ctx, args[1:], stdin, stdout, stderr)
+		case "assign":
+			return runAssignCmd(ctx, args[1:], stdout, stderr)
+		case "review":
+			return runReviewCmd(ctx, args[1:], stdin, stdout, stderr)
 		case "config":
 			return runConfigCmd(ctx, args[1:], stdout, stderr)
 		case "skill":
