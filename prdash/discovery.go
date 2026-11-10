@@ -3,11 +3,13 @@ package prdash
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -160,10 +162,12 @@ func ParseGitWorktreePorcelain(porcelain string) []Worktree {
 }
 
 type ghPRItem struct {
+	State             string           `json:"state"`
+	IsDraft           bool             `json:"isDraft"`
+	HeadRefOid        string           `json:"headRefOid"`
 	Number            int              `json:"number"`
 	Title             string           `json:"title"`
 	Body              string           `json:"body"`
-	HeadRefOid        string           `json:"headRefOid"`
 	HeadRefName       string           `json:"headRefName"`
 	BaseRefName       string           `json:"baseRefName"`
 	Additions         int              `json:"additions"`
@@ -181,26 +185,77 @@ type ghStatusRollup struct {
 	Conclusion string `json:"conclusion"`
 }
 
-// DiscoverPullRequests queries open pull requests from GitHub using the `gh` CLI.
-func DiscoverPullRequests(ctx context.Context, repoFullName, dir string, defaultBranch string, worktrees []Worktree, modelCfg ModelPresetConfig) ([]PullRequest, error) {
-	args := []string{
-		"pr", "list",
-		"--state", "open",
-		"--limit", "100",
-		"--json", "number,title,body,headRefOid,headRefName,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
+const githubPRLimit = 100
+const githubPRFields = "number,title,body,headRefName,headRefOid,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt,state,isDraft"
+
+// ErrPRResultsTruncated means the open PR list may be incomplete. Retrieved PRs
+// remain usable, but callers must not infer that absent PRs are closed.
+var ErrPRResultsTruncated = errors.New("open PR discovery exceeded its 100-PR limit; results are truncated")
+
+// DiscoverPullRequests queries open pull requests. It returns useful results
+// together with ErrPRResultsTruncated when completeness cannot be established.
+func DiscoverPullRequests(ctx context.Context, repoFullName, dir, defaultBranch string, worktrees []Worktree, modelCfg ModelPresetConfig) ([]PullRequest, error) {
+	return discoverTrackedPullRequests(ctx, repoFullName, dir, defaultBranch, worktrees, modelCfg, nil)
+}
+
+func discoverTrackedPullRequests(ctx context.Context, repoFullName, dir, defaultBranch string, worktrees []Worktree, modelCfg ModelPresetConfig, tracked []int) ([]PullRequest, error) {
+	out, err := runGHPR(ctx, repoFullName, dir, "list", "--state", "open", "--limit", strconv.Itoa(githubPRLimit+1))
+	var prs []PullRequest
+	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		prs, err = ParseGitHubPRListJSON(out, defaultBranch, worktrees, modelCfg)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if len(prs) > githubPRLimit {
+			prs = prs[:githubPRLimit]
+			errs = append(errs, ErrPRResultsTruncated)
+		}
 	}
-	if strings.Contains(repoFullName, "/") {
-		args = append(args, "--repo", repoFullName)
+	seen := make(map[int]bool, len(prs))
+	for _, pr := range prs {
+		seen[pr.Number] = true
 	}
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	for _, number := range tracked {
+		if seen[number] {
+			continue
+		}
+		seen[number] = true
+		out, err := runGHPR(ctx, repoFullName, dir, "view", strconv.Itoa(number))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		// pr view emits an object; share exactly the same parser as the open list.
+		data := append([]byte{'['}, out...)
+		data = append(data, ']')
+		refreshed, err := ParseGitHubPRListJSON(data, defaultBranch, worktrees, modelCfg)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("PR #%d: %w", number, err))
+			continue
+		}
+		prs = append(prs, refreshed...)
+	}
+	return prs, errors.Join(errs...)
+}
+
+func runGHPR(ctx context.Context, repo, dir string, args ...string) ([]byte, error) {
+	command := append([]string{"pr"}, args...)
+	command = append(command, "--json", githubPRFields)
+	if strings.Contains(repo, "/") {
+		command = append(command, "--repo", repo)
+	}
+	cmd := exec.CommandContext(ctx, "gh", command...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr list: %w", err)
+		return nil, fmt.Errorf("gh pr %s: %w", strings.Join(args, " "), err)
 	}
-	return ParseGitHubPRListJSON(out, defaultBranch, worktrees, modelCfg)
+	return out, nil
 }
 
 // ParseGitHubPRListJSON converts `gh pr list --json ...` output into PullRequest structs,
@@ -230,12 +285,15 @@ func ParseGitHubPRListJSON(data []byte, defaultBranch string, worktrees []Worktr
 			updated = time.Now().UTC()
 		}
 		pr := PullRequest{
+			HeadSHA:       item.HeadRefOid,
+			GitHubState:   mapGHState(item.State),
+			IsDraft:       item.IsDraft,
+			Mergeability:  mapGHMergeability(item.Mergeable),
 			ID:            fmt.Sprintf("pr-%d", item.Number),
 			Number:        item.Number,
 			Title:         item.Title,
 			Description:   item.Body,
 			Branch:        item.HeadRefName,
-			HeadSHA:       item.HeadRefOid,
 			BaseBranch:    item.BaseRefName,
 			WorktreeID:    wt.ID,
 			SessionID:     wt.SessionID,
@@ -314,8 +372,9 @@ func inferStackedChains(prs []PullRequest, byHead map[string]int, defaultBranch 
 
 func mapGHCIStatus(checks []ghStatusRollup) string {
 	if len(checks) == 0 {
-		return "passing"
+		return "unknown"
 	}
+	hasUnknown := false
 	hasRunning := false
 	for _, c := range checks {
 		state := strings.ToUpper(strings.TrimSpace(c.Conclusion))
@@ -328,6 +387,9 @@ func mapGHCIStatus(checks []ghStatusRollup) string {
 			return "failing"
 		case "PENDING", "EXPECTED":
 			hasRunning = true
+		case "SUCCESS", "NEUTRAL", "SKIPPED":
+		default:
+			hasUnknown = true
 		}
 		if status == "IN_PROGRESS" || status == "QUEUED" || status == "PENDING" {
 			hasRunning = true
@@ -336,7 +398,28 @@ func mapGHCIStatus(checks []ghStatusRollup) string {
 	if hasRunning {
 		return "running"
 	}
+	if hasUnknown {
+		return "unknown"
+	}
 	return "passing"
+}
+
+func mapGHState(state string) string {
+	switch strings.ToLower(state) {
+	case "open", "closed", "merged":
+		return strings.ToLower(state)
+	default:
+		return "unknown"
+	}
+}
+
+func mapGHMergeability(state string) string {
+	switch strings.ToLower(state) {
+	case "mergeable", "conflicting":
+		return strings.ToLower(state)
+	default:
+		return "unknown"
+	}
 }
 
 func mapGHReviewDecision(decision string) string {

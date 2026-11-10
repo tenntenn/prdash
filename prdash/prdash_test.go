@@ -269,11 +269,11 @@ func TestRoutineActionsQueueWorkUntilSessionReportsResult(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReportSessionResult: %v", err)
 			}
-			if completed.Status != prdash.StatusWaitingForHuman || completed.HasConflicts || completed.CIStatus != "passing" {
+			if completed.Status != prdash.StatusWaitingForHuman || completed.HasConflicts != pr.HasConflicts || completed.CIStatus != pr.CIStatus {
 				t.Fatalf("unexpected PR state after session report: %+v", completed)
 			}
-			if rem := svc.PendingInstructions(pr.SessionID); len(rem) != 0 {
-				t.Fatalf("expected pending instructions to be marked handled after ReportSessionResult, got %+v", rem)
+			if rem := svc.PendingInstructions(pr.SessionID); len(rem) == 0 {
+				t.Fatal("legacy report must not acknowledge instructions without their IDs")
 			}
 		})
 	}
@@ -361,6 +361,7 @@ func TestHTTPHandler(t *testing.T) {
 	svc := newSeededService(t)
 	srv := httptest.NewServer(prdash.NewHandler(svc))
 	defer srv.Close()
+	token := acquireHTTPToken(t, srv.URL)
 
 	cases := []struct {
 		name       string
@@ -385,6 +386,7 @@ func TestHTTPHandler(t *testing.T) {
 				t.Fatalf("NewRequestWithContext: %v", err)
 			}
 			if tc.body != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
 				req.Header.Set("Content-Type", "application/json")
 			}
 			resp, err := http.DefaultClient.Do(req)
@@ -435,8 +437,8 @@ func TestMCPServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPR(107): %v", err)
 	}
-	if pr107.HasConflicts || pr107.Status != prdash.StatusWaitingForHuman {
-		t.Fatalf("expected PR #107 conflicts to be resolved after session report, got %+v", pr107)
+	if !pr107.HasConflicts || pr107.Status != prdash.StatusWaitingForHuman {
+		t.Fatalf("expected PR #107 handoff to preserve conflict state, got %+v", pr107)
 	}
 }
 

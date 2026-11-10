@@ -22,16 +22,17 @@ import (
 
 // SBNNCommentRequest describes a pull request comment dispatched through the local sbnn review tool.
 type SBNNCommentRequest struct {
-	Repository   string `json:"repository"`
-	PRNumber     int    `json:"pr_number"`
-	Branch       string `json:"branch"`
-	BaseBranch   string `json:"base_branch,omitempty"`
-	HeadSHA      string `json:"head_sha,omitempty"`
-	Worktree     string `json:"worktree"`
-	WorktreePath string `json:"worktree_path,omitempty"`
-	FilePath     string `json:"file_path,omitempty"`
-	Line         int    `json:"line,omitempty"`
-	Body         string `json:"body"`
+	AppliedConfig EffectiveConfig `json:"applied_config"`
+	Repository    string          `json:"repository"`
+	PRNumber      int             `json:"pr_number"`
+	Branch        string          `json:"branch"`
+	Worktree      string          `json:"worktree"`
+	FilePath      string          `json:"file_path,omitempty"`
+	Line          int             `json:"line,omitempty"`
+	Body          string          `json:"body"`
+	BaseBranch    string          `json:"base_branch,omitempty"`
+	HeadSHA       string          `json:"head_sha,omitempty"`
+	WorktreePath  string          `json:"worktree_path,omitempty"`
 }
 
 // SBNNCommentResult contains the formatted comment record produced by sbnn.
@@ -46,14 +47,15 @@ type SBNNCommentResult struct {
 
 // SBNNReviewRequest describes an automated review request sent to sbnn.
 type SBNNReviewRequest struct {
-	Repository   string `json:"repository"`
-	PRNumber     int    `json:"pr_number"`
-	Branch       string `json:"branch"`
-	BaseBranch   string `json:"base_branch"`
-	HeadSHA      string `json:"head_sha,omitempty"`
-	Worktree     string `json:"worktree"`
-	WorktreePath string `json:"worktree_path,omitempty"`
-	Focus        string `json:"focus,omitempty"`
+	AppliedConfig EffectiveConfig `json:"applied_config"`
+	Repository    string          `json:"repository"`
+	PRNumber      int             `json:"pr_number"`
+	Branch        string          `json:"branch"`
+	BaseBranch    string          `json:"base_branch"`
+	Worktree      string          `json:"worktree"`
+	Focus         string          `json:"focus,omitempty"`
+	HeadSHA       string          `json:"head_sha,omitempty"`
+	WorktreePath  string          `json:"worktree_path,omitempty"`
 }
 
 // SBNNReviewResult contains the structured findings and completion state returned by sbnn.
