@@ -196,13 +196,13 @@ func (s *Service) ReportInstructionResult(req InstructionResultRequest) (Session
 				if req.Status == StatusWaitingForHuman && previousStatus != StatusWaitingForHuman {
 					s.emitNotificationLocked(pr, previousStatus, req.Status, fmt.Sprintf("PR #%d is now Waiting for Human", pr.Number), req.Report, now)
 				}
-				pr.Thread = append(pr.Thread, ThreadMessage{ID: s.nextID("msg"), Author: msg.To, Role: "session", Kind: "status_change", Text: req.Report, CreatedAt: now})
+				pr.Thread = append(pr.Thread, cloneThreadMessage(ThreadMessage{AppliedConfig: msg.AppliedConfig, ID: s.nextID("msg"), Author: msg.To, Role: "session", Kind: "status_change", Text: req.Report, CreatedAt: now}))
 			}
 		}
-		report := SessionMessage{ID: s.nextID("smsg"), From: msg.To, To: s.controller.ID, Direction: "report", PRNumber: msg.PRNumber, Text: req.Report, CreatedAt: now, InstructionID: msg.ID, TargetCommit: msg.TargetCommit, ExecutionState: req.Outcome, ConsumerID: msg.ConsumerID, Attempt: msg.Attempt, Result: req.Report, ResultStatus: req.Status, ResultApplied: msg.ResultApplied}
-		s.controller.Messages = append(s.controller.Messages, report)
+		report := SessionMessage{AppliedConfig: msg.AppliedConfig, ID: s.nextID("smsg"), From: msg.To, To: s.controller.ID, Direction: "report", PRNumber: msg.PRNumber, Text: req.Report, CreatedAt: now, InstructionID: msg.ID, TargetCommit: msg.TargetCommit, ExecutionState: req.Outcome, ConsumerID: msg.ConsumerID, Attempt: msg.Attempt, Result: req.Report, ResultStatus: req.Status, ResultApplied: msg.ResultApplied}
+		s.controller.Messages = append(s.controller.Messages, cloneSessionMessage(report))
 		if sess, idx := s.findSessionLocked(msg.To); sess != nil && idx >= 0 {
-			sess.Messages = append(sess.Messages, report)
+			sess.Messages = append(sess.Messages, cloneSessionMessage(report))
 		}
 		return nil
 	})
@@ -264,7 +264,7 @@ func (s *Service) instructionLocked(sessionID, id string) (SessionMessage, error
 				msg.ExecutionState = InstructionDelivered
 			}
 		}
-		return msg, nil
+		return cloneSessionMessage(msg), nil
 	}
 	return SessionMessage{}, ErrInstructionNotFound
 }
@@ -272,13 +272,13 @@ func (s *Service) instructionLocked(sessionID, id string) (SessionMessage, error
 func (s *Service) storeInstructionLocked(msg SessionMessage) {
 	for i := range s.controller.Messages {
 		if s.controller.Messages[i].ID == msg.ID {
-			s.controller.Messages[i] = msg
+			s.controller.Messages[i] = cloneSessionMessage(msg)
 		}
 	}
 	for i := range s.sessions {
 		for j := range s.sessions[i].Messages {
 			if s.sessions[i].Messages[j].ID == msg.ID {
-				s.sessions[i].Messages[j] = msg
+				s.sessions[i].Messages[j] = cloneSessionMessage(msg)
 			}
 		}
 	}

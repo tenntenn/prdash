@@ -14,13 +14,14 @@ import (
 
 // SBNNCommentRequest describes a pull request comment dispatched through the local sbnn review tool.
 type SBNNCommentRequest struct {
-	Repository string `json:"repository"`
-	PRNumber   int    `json:"pr_number"`
-	Branch     string `json:"branch"`
-	Worktree   string `json:"worktree"`
-	FilePath   string `json:"file_path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	Body       string `json:"body"`
+	AppliedConfig EffectiveConfig `json:"applied_config"`
+	Repository    string          `json:"repository"`
+	PRNumber      int             `json:"pr_number"`
+	Branch        string          `json:"branch"`
+	Worktree      string          `json:"worktree"`
+	FilePath      string          `json:"file_path,omitempty"`
+	Line          int             `json:"line,omitempty"`
+	Body          string          `json:"body"`
 }
 
 // SBNNCommentResult contains the formatted comment record produced by sbnn.
@@ -33,12 +34,13 @@ type SBNNCommentResult struct {
 
 // SBNNReviewRequest describes an automated review request sent to sbnn.
 type SBNNReviewRequest struct {
-	Repository string `json:"repository"`
-	PRNumber   int    `json:"pr_number"`
-	Branch     string `json:"branch"`
-	BaseBranch string `json:"base_branch"`
-	Worktree   string `json:"worktree"`
-	Focus      string `json:"focus,omitempty"`
+	AppliedConfig EffectiveConfig `json:"applied_config"`
+	Repository    string          `json:"repository"`
+	PRNumber      int             `json:"pr_number"`
+	Branch        string          `json:"branch"`
+	BaseBranch    string          `json:"base_branch"`
+	Worktree      string          `json:"worktree"`
+	Focus         string          `json:"focus,omitempty"`
 }
 
 // SBNNReviewResult contains the structured findings returned by sbnn.

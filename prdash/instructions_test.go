@@ -468,3 +468,43 @@ func instructionHTTP(t *testing.T, handler http.Handler, method, path, body stri
 	handler.ServeHTTP(rec, req)
 	return rec
 }
+
+func TestInstructionPreservesFrozenConfiguration(t *testing.T) {
+	t.Parallel()
+	root := configRepo(t)
+	writeRepoConfig(t, root, "review:\n  agent: original-agent\nreview_response:\n  verify:\n    - original-command\n")
+	svc := prdash.NewService(prdash.Options{WorkDir: root})
+	if _, err := svc.SendControllerInstruction("frozen settings"); err != nil {
+		t.Fatal(err)
+	}
+	msg := svc.PendingInstructions("controller")[0]
+	claim := claimInstruction(t, svc, msg)
+	claim.Instruction.AppliedConfig.Config.ReviewResponse.Verify[0] = "caller-mutation"
+	current, err := svc.GetInstruction("controller", msg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.AppliedConfig.Config.ReviewResponse.Verify[0] != "original-command" {
+		t.Fatal("claim snapshot mutated service settings")
+	}
+	current.AppliedConfig.Config.ReviewResponse.Verify[0] = "get-mutation"
+	writeRepoConfig(t, root, "review:\n  agent: replacement-agent\n")
+	if _, err := svc.ReloadConfig(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.ReportInstructionResult(instructionResult(claim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AppliedConfig.Config.Review.Agent != "original-agent" {
+		t.Fatal("result lost instruction settings")
+	}
+	result.AppliedConfig.Config.Review.Agent = "result-mutation"
+	for _, m := range svc.Snapshot().ControllerSession.Messages {
+		if m.ID == msg.ID || m.InstructionID == msg.ID {
+			if m.AppliedConfig == nil || m.AppliedConfig.Config.Review.Agent != "original-agent" || m.AppliedConfig.Config.ReviewResponse.Verify[0] != "original-command" {
+				t.Fatalf("instruction settings changed: %+v", m.AppliedConfig)
+			}
+		}
+	}
+}

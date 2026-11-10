@@ -138,3 +138,28 @@ func TestCLISubcommandsWorkflow(t *testing.T) {
 		t.Fatalf("expected errWaitTimeout after report, got %v", err)
 	}
 }
+
+func TestConfigCommand(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "prdash.yaml")
+	if err := os.WriteFile(path, []byte("review:\n  agent: sample-cli\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := run(t.Context(), []string{"config", "-dir", root}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "sample-cli") || !strings.Contains(stdout.String(), "defaulted_fields") {
+		t.Fatalf("config output=%s", stdout.String())
+	}
+	if err := os.WriteFile(path, []byte("version: 99\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"config", "-dir", root}, strings.NewReader(""), &stdout, &stderr); !errors.Is(err, prdash.ErrConfigValidation) {
+		t.Fatalf("invalid configuration error=%v", err)
+	}
+}
