@@ -1,192 +1,94 @@
 # prdash
 
-**prdash** is a repository-scoped command-center dashboard for viewing, coordinating, and operating pull requests created by AI coding agent sessions.
+**Coordinate pull requests with your coding agent through the prdash Skill.**
 
-`prdash` ships as a vendor-neutral **Agent Skill** ([`skills/prdash/SKILL.md`](skills/prdash/SKILL.md)) embedded in a single Go binary, along with an MCP server and an importable Go package ([`github.com/tenntenn/prdash/prdash`](prdash)). The coding agent session that loads the skill acts as the **Dashboard Controller Session**—starting the local web dashboard, receiving instructions from the browser UI, and coordinating worker sessions bound to git worktrees.
+Load the [prdash Skill](skills/prdash/SKILL.md) into your agent, then ask it to open a dashboard for your repository. The agent starts prdash, shares the local URL, consumes instructions, and reports its results. You use the dashboard to inspect PRs and send instructions while the agent does the work.
 
-Each dashboard instance is scoped to a target repository and links three core entities:
-- **Worktree**: Git worktrees where agent sessions run isolated work.
-- **Session**: Agent sessions bound to worktrees, plus the controller session running the dashboard itself.
-- **Pull Request (PR)**: Pull requests created by agent sessions, including stacked PR chains.
+> Use the prdash skill to open a dashboard for this repository. Show me the URL and handle the instructions I send through it.
 
-## Screenshots
+The Skill is the entry point. The `prdash` command supplies the local dashboard and instruction queue used by the agent. CLI, HTTP, MCP, and Go APIs are also available for integrations.
 
-### Main Dashboard Overview (Stacked PR Chains & Turn Status)
+## Install the Skill
 
-![prdash Dashboard Overview](docs/screenshots/dashboard-overview.png)
-
-### Expanded PR Detail, Routine Actions, `sbnn` Review & Session Thread
-
-![prdash Expanded PR Detail](docs/screenshots/pr-detail-expanded.png)
-
-## Install
-
-Install the `prdash` binary with `go install`:
+The Skill ships inside the `prdash` binary, so its instructions match the installed command. Install the command and copy its Skill into the directory your agent loads:
 
 ```console
-$ go install github.com/tenntenn/prdash@latest
+go install github.com/tenntenn/prdash@latest
+prdash skill --install /absolute/path/to/your/skills-directory
 ```
 
-or download a prebuilt binary for your platform from the [GitHub Releases](https://github.com/tenntenn/prdash/releases) page and place it on your `PATH`.
+The installer creates `prdash/SKILL.md` beneath that directory. Choose your agent's project-level or user-level skills directory. The Skill is a Markdown instruction file and is not tied to a particular agent provider.
 
-All web assets and the agent skill are embedded in the binary via `go:embed`, so no additional runtime files are required.
+Your agent needs shell access, `git`, and an authenticated `gh` for the target repository. The `go install` step requires the Go version declared in [go.mod](go.mod). Install `sbnn` if you want to use local diff reviews.
 
-## Agent Skill
+If your agent supports reading a Skill file directly, give it [skills/prdash/SKILL.md](skills/prdash/SKILL.md). The Skill includes command installation and update instructions.
 
-`prdash` ships a vendor-neutral agent skill: a plain Markdown file with YAML front matter that describes how to launch the dashboard, coordinate worktree sessions, and operate pull requests via the CLI, HTTP API, or MCP server. Nothing in it is tied to a specific agent vendor, so any coding agent that reads skill or instruction files can use it.
+## Ask your agent to operate the dashboard
 
-The source is [`skills/prdash/SKILL.md`](skills/prdash/SKILL.md) and it is embedded in the binary, so the skill you install always matches the `prdash` binary you are running.
+Start with a repository and a concrete request:
 
-### Installing the skill
+> Use prdash for this repository. Discover the worktrees and open PRs, give me the dashboard URL, and wait for my instructions.
+
+Then use the browser to inspect a PR, write an instruction, or request a routine operation. For example:
+
+> Investigate the failing checks on PR #42, fix the cause, run the relevant tests, and report the result in prdash.
+
+> Prepare PR #42 for review. Show the diff in sbnn and address the submitted feedback.
+
+The agent follows this cycle:
+
+1. Start the repository's dashboard and share its URL.
+2. Inspect the PR, worktree, and assigned session before acting.
+3. Consume queued instructions using the Skill's `wait` / `instructions` workflow.
+4. Perform the requested work, verify it, and report the result.
+5. Return to waiting for the next instruction or a human decision.
+
+Keep the controller agent session running while you want it to consume instructions. An open browser does not itself execute queued work. Worktree-derived session entries are dashboard identifiers; they do not establish a connection to an existing agent conversation. Workers must consume their assigned instructions or use an explicit runtime integration.
+
+Model presets express a configuration choice, not proof of which model a live agent is using. Changing a dashboard setting alone does not establish that the runtime applied it.
+
+## What you see in the dashboard
+
+- PRs grouped by stack, with CI, review information, and the next actor.
+- Worktrees and session assignments for each PR.
+- A controller conversation and PR-specific instruction threads.
+- Review actions, routine-action requests, and notifications when a human decision is needed.
+
+A “Waiting for Human” badge identifies the next actor; inspect the report and technical checks to determine whether the PR is ready to merge.
+
+### Overview
+
+![Dashboard with example PRs and stacked changes](docs/screenshots/dashboard-overview.png)
+
+### PR details and review discussion
+
+![Expanded PR with review and session discussion](docs/screenshots/pr-detail-expanded.png)
+
+Screenshots use example data. A new dashboard shows the repository's actual open PRs; a repository without open PRs starts with an empty list.
+
+## Update the Skill
+
+Ask your agent:
+
+> Update the prdash command and its installed Skill to the latest version.
+
+Or update them directly:
 
 ```console
-$ prdash skill                          # print SKILL.md to stdout
-$ prdash skill --list                   # list the files the skill consists of
-$ prdash skill --install <dir>          # write <dir>/prdash/SKILL.md
-$ prdash skill --install <dir> --force  # overwrite an older copy
+go install github.com/tenntenn/prdash@latest
+prdash skill --install /absolute/path/to/your/skills-directory --force
 ```
 
-`--install` writes the skill as a `prdash/` directory inside `<dir>` (`<dir>/prdash/SKILL.md`) and refuses to overwrite an existing file unless `--force` is given.
+Use `--force` to replace an installed Skill. To inspect the embedded instructions without installing them, run `prdash skill` or `prdash skill --list`.
 
-Where `<dir>` should point depends on your coding agent:
+## Integrations and development
 
-| Agent / Environment | Command |
-| --- | --- |
-| Project-scoped `.agents/skills` (Codex, Antigravity, Jules, …) | `prdash skill --install .agents/skills` |
-| User-scoped `~/.agents/skills` | `prdash skill --install ~/.agents/skills` |
-| Claude Code (this project / all projects) | `prdash skill --install .claude/skills` or `prdash skill --install ~/.claude/skills` |
-| An agent with its own rules or skills directory (Cursor, Cline, Windsurf, …) | `prdash skill --install <dir>` (check the agent's docs for the path it expects) |
-| Agents that read `AGENTS.md` without a skill directory | `prdash skill >> AGENTS.md` (or link `.agents/skills/prdash/SKILL.md` from `AGENTS.md`) |
+See the [CLI and integration reference](docs/integrations.md) for manual commands, flags, MCP configuration, and the Go package. The [Skill](skills/prdash/SKILL.md) contains the agent's operating procedure.
 
-### Updating the skill
-
-Upgrade the `prdash` binary (`go install` or the latest release binary) and re-run `prdash skill --install` with `--force`:
+Development tools are managed with [aqua](https://aquaproj.github.io/). Install them with `aqua i` and use:
 
 ```console
-$ go install github.com/tenntenn/prdash@latest
-$ prdash skill --install .agents/skills --force
-```
-
-Because the skill itself documents this update procedure, you can also simply ask your coding agent:
-
-> Update the `prdash` skill to the latest version.
-
-## Usage
-
-### Starting the Web Dashboard & Using the CLI
-
-```console
-$ prdash                               # auto-detects git repo, worktrees, and open GitHub PRs
-$ prdash status                        # show repository summary (worktrees, sessions, PRs)
-$ prdash sync                          # refresh git worktrees and open GitHub PRs
-$ prdash wait --session controller     # block until a human instruction arrives
-$ prdash instructions --session sess-1 # list unhandled instructions for a session
-$ prdash report --pr 42 -m "Fixed CI"  # report completion and transition PR to waiting_for_human
-$ prdash send --pr 42 -m "Run tests"   # queue an instruction for a PR session
-```
-
-Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so the Web UI, CLI subcommands, and MCP server (`prdash -mcp`) share state out of the box without needing manual `-state` flags.
-
-On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header, `prdash sync` is run, or `sync_repository` is called via MCP), `prdash` automatically:
-1. Detects the repository (`owner/name`, default branch, local root) via `git`.
-2. Discovers local git worktrees via `git worktree list --porcelain` and checks working tree status.
-3. Fetches open pull requests from GitHub via `gh pr list`, binds them to matching worktrees by branch, and infers stacked PR chains (`Stack 1/N → 2/N → ...`) from `baseRefName` and `headRefName`.
-
-`prdash` binds an available local port and prints the dashboard URL:
-
-```text
-prdash listening on http://127.0.0.1:<port> (repository: owner/name)
-```
-
-### Running as an MCP Server
-
-The same core logic can be exposed as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio:
-
-```json
-{
-  "mcpServers": {
-    "prdash": {
-      "command": "prdash",
-      "args": [
-        "-mcp",
-        "-repo",
-        "owner/name",
-        "-state",
-        "/tmp/prdash-state.json"
-      ]
-    }
-  }
-}
-```
-
-Passing the same `-state` file path to both the web server and the MCP server keeps browser actions and MCP tool calls synchronized in real time.
-
-### CLI Subcommands and Flags
-
-```console
-$ prdash [flags]                        # start the web dashboard (or MCP server with -mcp)
-$ prdash skill [--list | --install <dir> [--force]]
-$ prdash --version
-```
-
-| Flag | Default | Description |
-| :--- | :--- | :--- |
-| `-repo` | *(auto-detected)* | Target repository in `owner/name` format (detected from `git remote` if omitted) |
-| `-dir` | `.` | Local git repository directory to inspect |
-| `-no-sync` | `false` | Skip automatic `git worktree` and `gh pr list` discovery on startup |
-| `-addr` | `127.0.0.1:0` | HTTP listen address (`:0` selects a free port automatically) |
-| `-state` | *(in-memory)* | Optional JSON file path to persist and synchronize state between Web and MCP processes |
-| `-mcp` | `false` | Run as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio |
-| `-model-pine` | `claude-opus-4-6` | Concrete model identifier for the **Pine (High)** preset |
-| `-model-bamboo` | `claude-sonnet-4-6` | Concrete model identifier for the **Bamboo (Standard)** preset |
-| `-model-plum` | `claude-haiku-4-5` | Concrete model identifier for the **Plum (Fast)** preset |
-| `-version` | `false` | Print version and exit |
-
-### Using as a Go Package (`github.com/tenntenn/prdash/prdash`)
-
-```console
-$ go get github.com/tenntenn/prdash/prdash@latest
-```
-
-```go
-package main
-
-import (
-	"net/http"
-
-	"github.com/tenntenn/prdash/prdash"
-)
-
-func main() {
-	svc := prdash.NewService(prdash.Options{
-		Repository: "owner/repo",
-		StateFile:  "/tmp/prdash-state.json",
-	})
-	http.ListenAndServe("127.0.0.1:0", prdash.NewHandler(svc))
-}
-```
-
-## Dashboard Features
-
-- **Stacked PR Chains**: Stacked pull requests are grouped into ordered chains (`Stack 1/3`, `Stack 2/3`, `Stack 3/3`) showing base-branch dependencies (`#101 → #102 → #103`).
-- **Collapsible Details (Collapsed by Default)**: Click any PR row to toggle its detail panel open or closed, or use **Expand All** / **Collapse All**.
-- **Turn Ownership Badges**:
-  - **Waiting for Human** (`waiting_for_human`): Highlighted in amber when the session has completed its step and awaits human review or decision.
-  - **Agent Working** (`working`): Highlighted in blue while the assigned session is actively modifying the PR.
-- **Filter Toolbar**: Filter pull requests by status (**All PRs**, **Waiting for Human**, **Agent Working**, **Stacked Only**) or by assigned **Worker Session / Worktree**.
-- **Per-PR Controls**:
-  - **Auto-Mode Toggle**: When enabled on a PR, routine tasks and review responses are processed autonomously by the session and transition back to **Waiting for Human** with a notification.
-  - **Model Tier Selector (Pine / Bamboo / Plum)**: Select the three-tier model preset (`pine` = High Capability, `bamboo` = Standard Balanced, `plum` = Fast Lightweight) per PR, session, or subagent.
-  - **Routine Operations**: One-click actions for **Resolve Conflicts**, **Rebase Stack**, **Fix CI**, **Sync Branch**, and **Update Summary**.
-  - **Review & Turn Handoff**: **Request Review (sbnn)**, **Address Review**, inline/PR comment submission via `sbnn` ([`prdash/sbnn.go`](prdash/sbnn.go)), and manual status handoff.
-- **Dashboard Session & Notifications Sidebar**: Send orchestration instructions to the controller session running the dashboard, inspect inter-session logs, and receive real-time in-app and Web Notification API alerts when PRs transition to **Waiting for Human**.
-
-## Development
-
-Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua i` to install `go`, `task`, and `goimports`.
-
-```console
-$ task build     # build the prdash binary
-$ task check     # run go fix, goimports, go vet, and go test -race
-$ task ui:docs   # regenerate screenshots in docs/screenshots/
+task build     # build the command and embedded Skill
+task check     # run go fix, goimports, go vet, and go test -race
+task ui:docs   # regenerate screenshots from example data
 ```
