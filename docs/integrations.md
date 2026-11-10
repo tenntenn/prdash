@@ -142,3 +142,31 @@ HTTP endpoints use `/api/sessions/{id}/instructions/{instruction}` with `GET` fo
 inspection and `POST` suffixes `/ack`, `/claim`, `/result`, `/retry`. MCP exposes
 `get_instruction`, `ack_instruction`, `claim_instruction`,
 `report_instruction_result`, and `retry_instruction` on its owning Service.
+
+### Requested and observed models
+
+Model presets are **requested settings**. Saving a session, PR, or subagent tier
+never changes an agent runtime. Session settings and PR settings are independent:
+a PR-scoped instruction captures the PR's requested model; a direct instruction
+captures the destination session's requested model. The instruction records
+`requested_model` and `model_source`; these are hints, not proof of application.
+Changing either preset does not rewrite already queued instructions.
+
+The standard server has no model runtime adapter and reports `unconnected` and
+`saved_not_applied`. Library integrations can explicitly bind a session through
+`Options.ModelRuntimes`. A binding advertises separate observation, current-turn,
+and next-turn capabilities. A worktree, session ID, or provider label never
+establishes a runtime connection by itself. Bindings and observations are
+process-local and must be re-established after restart.
+
+`refresh_session_model` (HTTP `POST /api/sessions/{id}/model-runtime/refresh`)
+reads the last observed model and timestamp without changing settings.
+`apply_session_model` (HTTP `POST /api/sessions/{id}/model-runtime/apply`, JSON
+`{"scope":"current_turn"}` or `{"scope":"next_turn"}`) explicitly applies the
+session's saved primary model only. It requires the corresponding advertised
+capability and exact runtime confirmation of the requested model and scope.
+Next-turn acceptance is shown as `scheduled`; current-turn acceptance is
+`applied`. Neither replaces the last observation. Failed, unsupported, or
+superseded requests remain visible, and unsupported operations return HTTP 409.
+Subagent presets remain save-only. Sending instructions never implicitly calls
+the model application API.

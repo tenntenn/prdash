@@ -339,6 +339,24 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		}
 		return svc.SetSessionModelTier(args.SessionID, args.Tier, args.SubagentTier)
 
+	case "refresh_session_model":
+		var args struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, err
+		}
+		return svc.RefreshSessionModel(ctx, args.SessionID)
+	case "apply_session_model":
+		var args struct {
+			SessionID string `json:"session_id"`
+			Scope     string `json:"scope"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, err
+		}
+		return svc.ApplySessionModel(ctx, args.SessionID, args.Scope)
+
 	case "configure_model_presets":
 		var args ModelPresetConfig
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -573,7 +591,7 @@ func mcpToolsList() []mcpTool {
 		},
 		{
 			Name:        "set_model_tier",
-			Description: "Set the three-tier model preset (pine, bamboo, plum) for a session or pull request.",
+			Description: "Save a requested model preset for a session or PR only. Does not apply it to a runtime or change other scopes.",
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"tier"},
@@ -584,6 +602,16 @@ func mcpToolsList() []mcpTool {
 					"subagent_tier": map[string]any{"type": "string", "description": "Optional subagent preset tier: pine, bamboo, or plum"},
 				},
 			},
+		},
+		{
+			Name:        "refresh_session_model",
+			Description: "Read an observed model from the explicitly bound runtime. Never infer the active model from presets.",
+			InputSchema: map[string]any{"type": "object", "required": []string{"session_id"}, "properties": map[string]any{"session_id": map[string]any{"type": "string"}}},
+		},
+		{
+			Name:        "apply_session_model",
+			Description: "Explicitly apply the saved primary session model through its bound runtime. Requires supported current_turn or next_turn scope; does not apply subagent presets.",
+			InputSchema: map[string]any{"type": "object", "required": []string{"session_id", "scope"}, "properties": map[string]any{"session_id": map[string]any{"type": "string"}, "scope": map[string]any{"type": "string", "enum": []string{"current_turn", "next_turn"}}}},
 		},
 		{
 			Name:        "configure_model_presets",

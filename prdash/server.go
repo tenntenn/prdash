@@ -347,6 +347,30 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, sess)
 	})
 
+	mux.HandleFunc("POST /api/sessions/{id}/model-runtime/refresh", func(w http.ResponseWriter, r *http.Request) {
+		sess, err := svc.RefreshSessionModel(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc("POST /api/sessions/{id}/model-runtime/apply", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Scope string `json:"scope"`
+		}
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		sess, err := svc.ApplySessionModel(r.Context(), r.PathValue("id"), body.Scope)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sess)
+	})
+
 	mux.HandleFunc("POST /api/sessions/{id}/report", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var body struct {
@@ -497,8 +521,10 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, ErrInstructionSession), errors.Is(err, ErrInstructionConflict):
 		writeError(w, http.StatusConflict, err)
-	case errors.Is(err, ErrInstructionInput), errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
+	case errors.Is(err, ErrInvalidModelScope), errors.Is(err, ErrInstructionInput), errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
 		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, ErrModelRuntimeUnsupported), errors.Is(err, ErrModelRuntimeBusy):
+		writeError(w, http.StatusConflict, err)
 	default:
 		writeError(w, http.StatusInternalServerError, err)
 	}
