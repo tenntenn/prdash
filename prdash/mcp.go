@@ -252,6 +252,15 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		}
 		return svc.RequestReview(ctx, args.PRNumber, args.Focus)
 
+	case "preview_response_workflow":
+		var args struct {
+			PRNumber int             `json:"pr_number"`
+			Request  ResponseRequest `json:"request"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, err
+		}
+		return svc.PreviewResponseWorkflow(args.PRNumber, args.Request)
 	case "address_review":
 		var args struct {
 			PRNumber    int    `json:"pr_number"`
@@ -485,6 +494,7 @@ func mcpToolsList() []mcpTool {
 				},
 			},
 		},
+		{Name: "preview_response_workflow", Description: "Preview repository response policy, finding classification, ordered actions and human checkpoints without executing work.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"pr_number": map[string]any{"type": "integer"}, "request": map[string]any{"type": "object"}}, "required": []string{"pr_number"}}},
 		{
 			Name:        "address_review",
 			Description: "Instruct the assigned agent session to address open review comments on a pull request.",

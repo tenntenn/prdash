@@ -45,6 +45,8 @@ captured with the configuration. Files are limited to 1 MiB each.
 | `review_response.finding_policies.question` | `human_decide` | Same finding policies |
 | `review_response.fix`, `review_response.test` | `auto` | `auto`, `confirm`, `off` |
 | `review_response.commit`, `push`, `reply`, `resolve` | `confirm` | `auto`, `confirm`, `off` |
+| `review_response.steps` | `[fix, test, commit, push, reply, resolve, rereview]` | Ordered enabled actions; dependencies must be preserved |
+| `review_response.rereview.gate` | `confirm` | `auto`, `confirm`, `off` |
 | `review_response.rereview.agent`, `.session` | empty | Optional agent and session role |
 | `review_response.rereview.max_rounds` | `1` | Integer from 0 to 20 |
 | `review_response.rereview.stop_on` | `approved` | `approved`, `no_open_comments` |
@@ -88,3 +90,6 @@ commands or external actions. This configuration layer validates and carries
 policy to request consumers; agent selection and response workflow execution
 are separate integrations. A configuration value alone does not launch an
 agent or authorize an external action.
+
+The response workflow preview and its current integration limits are documented
+in [response workflows](response-workflows.md).
