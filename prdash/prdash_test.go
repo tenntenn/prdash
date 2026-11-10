@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -353,45 +352,6 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 	afterNotifs := len(svc.Snapshot().Notifications)
 	if afterNotifs <= beforeNotifs {
 		t.Fatalf("expected new human notifications to be emitted, before=%d after=%d", beforeNotifs, afterNotifs)
-	}
-}
-
-func TestCLISBNNClient(t *testing.T) {
-	t.Parallel()
-
-	binDir := t.TempDir()
-	fakeSBNN := filepath.Join(binDir, "fake-sbnn")
-	script := "#!/bin/sh\nif [ \"$1\" = \"comments\" ]; then\n  echo '[{\"id\":\"c1\",\"path\":\"main.go\",\"startLine\":12,\"body\":\"sample-finding\",\"resolved\":false}]'\n  exit 1\nfi\nexit 0\n"
-	if err := os.WriteFile(fakeSBNN, []byte(script), 0o755); err != nil {
-		t.Fatalf("WriteFile fake-sbnn: %v", err)
-	}
-
-	client := prdash.NewCLISBNNClient(fakeSBNN, binDir)
-	cmtRes, err := client.SubmitComment(t.Context(), prdash.SBNNCommentRequest{
-		Repository: "example/sample",
-		PRNumber:   42,
-		FilePath:   "main.go",
-		Line:       12,
-		Body:       "sample-comment",
-	})
-	if err != nil {
-		t.Fatalf("SubmitComment: %v", err)
-	}
-	if !strings.Contains(cmtRes.Formatted, "main.go:12") {
-		t.Fatalf("unexpected formatted comment: %s", cmtRes.Formatted)
-	}
-
-	revRes, err := client.RunReview(t.Context(), prdash.SBNNReviewRequest{
-		Repository: "example/sample",
-		PRNumber:   42,
-		BaseBranch: "main",
-		Branch:     "feat/sample",
-	})
-	if err != nil {
-		t.Fatalf("RunReview: %v", err)
-	}
-	if len(revRes.Findings) != 1 || !strings.Contains(revRes.Findings[0], "sample-finding") {
-		t.Fatalf("unexpected review findings: %+v", revRes.Findings)
 	}
 }
 

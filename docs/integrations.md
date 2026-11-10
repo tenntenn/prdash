@@ -142,3 +142,5 @@ HTTP endpoints use `/api/sessions/{id}/instructions/{instruction}` with `GET` fo
 inspection and `POST` suffixes `/ack`, `/claim`, `/result`, `/retry`. MCP exposes
 `get_instruction`, `ack_instruction`, `claim_instruction`,
 `report_instruction_result`, and `retry_instruction` on its owning Service.
+
+See [sbnn review lifecycle](sbnn-reviews.md) for delivery, submission, and duplicate prevention semantics.

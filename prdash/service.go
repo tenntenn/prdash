@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,13 +13,15 @@ import (
 )
 
 var (
-	ErrPRNotFound           = errors.New("pull request not found")
-	ErrSessionNotFound      = errors.New("session not found")
-	ErrNotificationNotFound = errors.New("notification not found")
-	ErrInvalidModelTier     = errors.New("invalid model tier preset (must be pine, bamboo, or plum)")
-	ErrInvalidPRStatus      = errors.New("invalid pull request status")
-	ErrInvalidRoutineAction = errors.New("invalid routine action")
-	ErrEmptyMessage         = errors.New("message text must not be empty")
+	ErrStaleReview               = errors.New("review target changed")
+	ErrReviewWorktreeUnavailable = errors.New("review worktree unavailable")
+	ErrPRNotFound                = errors.New("pull request not found")
+	ErrSessionNotFound           = errors.New("session not found")
+	ErrNotificationNotFound      = errors.New("notification not found")
+	ErrInvalidModelTier          = errors.New("invalid model tier preset (must be pine, bamboo, or plum)")
+	ErrInvalidPRStatus           = errors.New("invalid pull request status")
+	ErrInvalidRoutineAction      = errors.New("invalid routine action")
+	ErrEmptyMessage              = errors.New("message text must not be empty")
 )
 
 // Options configures a new Service instance.
@@ -245,6 +248,8 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 				pr.ModelTier = existing.ModelTier
 				pr.ResolvedModel = s.modelConfig.Resolve(existing.ModelTier)
 				pr.Thread = existing.Thread
+				pr.SBNNReviews = existing.SBNNReviews
+				pr.SBNNGroupURL = existing.SBNNGroupURL
 				if pr.WorktreeID == "" {
 					pr.WorktreeID = existing.WorktreeID
 				}
@@ -413,6 +418,10 @@ func cloneSession(in Session) Session {
 
 func clonePR(in PullRequest) PullRequest {
 	out := in
+	out.SBNNReviews = slices.Clone(in.SBNNReviews)
+	for i := range out.SBNNReviews {
+		out.SBNNReviews[i].Findings = slices.Clone(in.SBNNReviews[i].Findings)
+	}
 	out.Thread = make([]ThreadMessage, len(in.Thread))
 	for i, msg := range in.Thread {
 		out.Thread[i] = cloneThreadMessage(msg)
@@ -719,6 +728,38 @@ func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest,
 	return res, nil
 }
 
+// reviewExecutionTargetLocked resolves the PR worktree rather than the session directory.
+func (s *Service) reviewExecutionTargetLocked(pr PullRequest) (string, string, error) {
+	var selected *Worktree
+	for i := range s.worktrees {
+		wt := &s.worktrees[i]
+		if pr.WorktreeID != "" {
+			if wt.ID == pr.WorktreeID {
+				selected = wt
+				break
+			}
+			continue
+		}
+		if wt.Branch == "" || wt.Branch != pr.Branch {
+			continue
+		}
+		if selected != nil {
+			return "", "", fmt.Errorf("%w: branch %s is ambiguous", ErrReviewWorktreeUnavailable, pr.Branch)
+		}
+		selected = wt
+	}
+	if selected == nil {
+		if pr.WorktreeID != "" {
+			return "", "", fmt.Errorf("%w: %s", ErrReviewWorktreeUnavailable, pr.WorktreeID)
+		}
+		return s.workDir, pr.HeadSHA, nil
+	}
+	if !filepath.IsAbs(selected.Path) {
+		return "", "", fmt.Errorf("%w: %s has no absolute path", ErrReviewWorktreeUnavailable, selected.ID)
+	}
+	return selected.Path, pr.HeadSHA, nil
+}
+
 // PostSBNNComment submits a review comment through the sbnn integration boundary,
 // appends it to the PR thread, and queues a review-fix instruction if Auto-Mode is enabled.
 func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath string, line int, body string) (PullRequest, error) {
@@ -737,7 +778,11 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
 	applied := cloneEffectiveConfig(s.config)
+	wtPath, headSHA, targetErr := s.reviewExecutionTargetLocked(prCopy)
 	s.mu.RUnlock()
+	if targetErr != nil {
+		return PullRequest{}, targetErr
+	}
 	req := SBNNCommentRequest{
 		AppliedConfig: cloneEffectiveConfig(applied),
 		Repository:    repoFullName,
@@ -747,6 +792,9 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 		FilePath:      strings.TrimSpace(filePath),
 		Line:          line,
 		Body:          body,
+		BaseBranch:    prCopy.BaseBranch,
+		WorktreePath:  wtPath,
+		HeadSHA:       headSHA,
 	}
 
 	result, err := s.reviewer.SubmitComment(ctx, req)
@@ -762,6 +810,7 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 	}
 
 	now := result.CreatedAt
+	pr.SBNNGroupURL = result.GroupURL
 	pr.Thread = append(pr.Thread, ThreadMessage{
 		AppliedConfig: &applied,
 		ID:            result.CommentID,
@@ -807,7 +856,11 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
 	applied := cloneEffectiveConfig(s.config)
+	wtPath, headSHA, targetErr := s.reviewExecutionTargetLocked(prCopy)
 	s.mu.RUnlock()
+	if targetErr != nil {
+		return PullRequest{}, targetErr
+	}
 	req := SBNNReviewRequest{
 		AppliedConfig: cloneEffectiveConfig(applied),
 		Repository:    repoFullName,
@@ -816,6 +869,8 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 		BaseBranch:    prCopy.BaseBranch,
 		Worktree:      prCopy.WorktreeID,
 		Focus:         strings.TrimSpace(focus),
+		WorktreePath:  wtPath,
+		HeadSHA:       headSHA,
 	}
 
 	reviewRes, err := s.reviewer.RunReview(ctx, req)
@@ -830,6 +885,19 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
+	currentPath, currentHead, currentErr := s.reviewExecutionTargetLocked(*pr)
+	stale := currentErr != nil || currentPath != wtPath || currentHead != headSHA || pr.Branch != prCopy.Branch || pr.BaseBranch != prCopy.BaseBranch || pr.WorktreeID != prCopy.WorktreeID || (headSHA != "" && reviewRes.ReviewedCommit != headSHA)
+	reviewRes.Stale = stale
+	pr.SBNNReviews = append(pr.SBNNReviews, reviewRes)
+	if stale {
+		s.dirty = true
+		res := clonePR(*pr)
+		snap := s.snapshotLocked()
+		s.mu.Unlock()
+		s.broadcast(snap)
+		return res, fmt.Errorf("%w: PR #%d", ErrStaleReview, prNumber)
+	}
+	pr.SBNNGroupURL = reviewRes.GroupURL
 	now := reviewRes.CreatedAt
 	prevStatus := pr.Status
 	reqLabel := "Requested code review via sbnn."
@@ -858,9 +926,12 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 	)
 	pr.UpdatedAt = now.Add(time.Millisecond)
 
-	if len(reviewRes.Findings) > 0 {
+	if !reviewRes.Reviewed {
+		pr.ReviewStatus = "review_pending"
+		pr.Status = StatusWaitingForHuman
+	} else if reviewRes.Verdict == "changes_requested" {
 		pr.ReviewStatus = "changes_requested"
-		if pr.AutoMode {
+		if pr.AutoMode && len(reviewRes.Findings) > 0 {
 			taskText := fmt.Sprintf("Address %d sbnn review finding(s): %s", len(reviewRes.Findings), reviewRes.Summary)
 			pr.Status = StatusWorking
 			if sess, _ := s.findSessionLocked(pr.SessionID); sess != nil {
@@ -883,14 +954,18 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 			}
 		}
 	} else {
+		pr.ReviewStatus = "reviewed"
+		if reviewRes.Verdict == "approved" {
+			pr.ReviewStatus = "approved"
+		}
 		pr.Status = StatusWaitingForHuman
 		if prevStatus == StatusWorking {
 			s.emitNotificationLocked(
 				pr,
 				StatusWorking,
 				StatusWaitingForHuman,
-				fmt.Sprintf("PR #%d Review Clean (Waiting for Human)", pr.Number),
-				fmt.Sprintf("sbnn review found no open comments on PR #%d.", pr.Number),
+				fmt.Sprintf("PR #%d Review Submitted (Waiting for Human)", pr.Number),
+				fmt.Sprintf("sbnn review was submitted for PR #%d.", pr.Number),
 				pr.UpdatedAt,
 			)
 		}
@@ -1548,6 +1623,12 @@ func (s *Service) UpsertPR(in PullRequest) (PullRequest, error) {
 	var prevStatus PRStatus
 	if existing != nil && idx >= 0 {
 		prevStatus = existing.Status
+		if in.SBNNReviews == nil {
+			in.SBNNReviews = existing.SBNNReviews
+		}
+		if in.SBNNGroupURL == "" {
+			in.SBNNGroupURL = existing.SBNNGroupURL
+		}
 		if len(in.Thread) == 0 {
 			in.Thread = existing.Thread
 		}

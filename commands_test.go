@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,14 +124,28 @@ func TestReviewRequestCLI(t *testing.T) {
 	git("add", "sample.txt")
 	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "feature")
 	bin := t.TempDir()
-	script := `#!/bin/sh
-if [ "$1" = "comments" ]; then
- printf '[{"id":"c1","path":"sample.txt","startLine":1,"body":"Check sample","resolved":false}]'
-else
- cat >/dev/null
- printf '{"group":"pr-35","url":"http://localhost:6280/pr-35"}'
-fi
-`
+	cmd := exec.CommandContext(t.Context(), "git", "-C", dir, "rev-parse", "HEAD")
+	sha, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.CommandContext(t.Context(), "git", "-C", dir, "diff", "main...HEAD")
+	patch, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte(strings.TrimSpace(string(patch))))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":       strings.TrimPrefix(r.URL.Path, "/_/api/groups/"),
+			"diffs":      []any{map[string]any{"id": "d1", "createdAt": "2026-01-01T00:00:00Z", "labels": map[string]string{"prdash_head": strings.TrimSpace(string(sha)), "prdash_diff": hex.EncodeToString(hash[:16])}}},
+			"reviewedAt": "2026-01-02T00:00:00Z", "reviewVerdict": "changes-requested",
+			"comments": []any{map[string]any{"id": "c1", "path": "sample.txt", "startLine": 1, "body": "Check sample", "resolved": false}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	script := "#!/bin/sh\nprintf '%s' '{\"app\":\"sbnn\",\"url\":\"" + server.URL + "\"}'\n"
+
 	if err := os.WriteFile(filepath.Join(bin, "sbnn"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
