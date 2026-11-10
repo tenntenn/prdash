@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -17,12 +18,25 @@ var webEmbedFS embed.FS
 // NewHandler returns an http.Handler serving the prdash web UI and JSON/SSE APIs.
 func NewHandler(svc *Service) http.Handler {
 	mux := http.NewServeMux()
+	registerInstructionHandlers(mux, svc)
 
 	webSub, err := fs.Sub(webEmbedFS, "web")
 	if err != nil {
 		panic(err)
 	}
 	fileServer := http.FileServer(http.FS(webSub))
+
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"config": svc.EffectiveConfig(), "error": svc.Snapshot().ConfigError})
+	})
+	mux.HandleFunc("POST /api/config/reload", func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := svc.ReloadConfig(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	})
 
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, svc.Snapshot())
@@ -32,7 +46,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Dir string `json:"dir"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		snap, syncErr := svc.SyncRepository(r.Context(), body.Dir)
 		if syncErr != nil {
 			writeServiceError(w, syncErr)
@@ -51,7 +68,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			PRNumber int `json:"pr_number"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		acked := svc.AckInstructions(id, body.PRNumber)
 		writeJSON(w, http.StatusOK, map[string]any{"acked": acked})
 	})
@@ -188,7 +208,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Focus string `json:"focus"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		pr, reqErr := svc.RequestReview(r.Context(), num, body.Focus)
 		if reqErr != nil {
 			writeServiceError(w, reqErr)
@@ -206,7 +229,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Instruction string `json:"instruction"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		pr, addrErr := svc.AddressReview(num, body.Instruction)
 		if addrErr != nil {
 			writeServiceError(w, addrErr)
@@ -388,7 +414,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			ID string `json:"id"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		if readErr := svc.MarkNotificationRead(body.ID); readErr != nil {
 			writeServiceError(w, readErr)
 			return
@@ -439,7 +468,7 @@ func NewHandler(svc *Service) http.Handler {
 	})
 
 	mux.Handle("/", fileServer)
-	return mux
+	return protectLocalHTTP(mux)
 }
 
 func parsePRNumber(r *http.Request) (int, error) {
@@ -454,7 +483,14 @@ func parsePRNumber(r *http.Request) (int, error) {
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
 	dec := json.NewDecoder(r.Body)
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -469,9 +505,13 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
+	case errors.Is(err, ErrConfigValidation):
+		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, ErrInstructionNotFound), errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
+	case errors.Is(err, ErrInstructionSession), errors.Is(err, ErrInstructionConflict):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, ErrInstructionInput), errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, ErrReviewWorktreeUnavailable):
 		writeError(w, http.StatusConflict, err)

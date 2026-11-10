@@ -2,10 +2,10 @@ package prdash
 
 import (
 	"context"
-"errors"
+	"errors"
 	"fmt"
 	"os"
-"os/exec"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -99,7 +99,7 @@ func (s *Service) ValidatePRWorktree(ctx context.Context, prNumber int) (Worktre
 	snapshot := clonePR(*pr)
 	if snapshot.HeadSHA == "" {
 		s.mu.RUnlock()
-		return Worktree{},fmt.Errorf("%w: PR #%d has no target commit; sync or register its full head SHA",ErrReviewWorktreeUnavailable,prNumber)
+		return Worktree{}, fmt.Errorf("%w: PR #%d has no target commit; sync or register its full head SHA", ErrReviewWorktreeUnavailable, prNumber)
 	}
 	// Reinspection can recover a previously missing or failed worktree.
 	candidates := append([]Worktree(nil), s.worktrees...)

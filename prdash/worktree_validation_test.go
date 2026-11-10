@@ -2,8 +2,8 @@ package prdash_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
-"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,7 +41,9 @@ func TestValidatePRWorktreeUsesLiveGit(t *testing.T) {
 			}
 			head := strings.TrimSpace(string(out))
 			path := dir
-			if tc.change == "unknown" { head = "" }
+			if tc.change == "unknown" {
+				head = ""
+			}
 			switch tc.change {
 			case "detached":
 				command := exec.CommandContext(t.Context(), "git", "-C", dir, "checkout", "--detach", head)
@@ -84,8 +86,13 @@ func TestValidatePRWorktreeUsesLiveGit(t *testing.T) {
 				}
 			}
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/api/prs/42/validate-worktree", bytes.NewReader(nil))
-			prdash.NewHandler(svc).ServeHTTP(rec, req)
+			handler := prdash.NewHandler(svc)
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+			req := httptest.NewRequest(http.MethodPost, server.URL+"/api/prs/42/validate-worktree", bytes.NewReader(nil))
+			req.RemoteAddr = "127.0.0.1:12345"
+			req.Header.Set("Authorization", "Bearer "+acquireHTTPToken(t, server.URL))
+			handler.ServeHTTP(rec, req)
 			want := http.StatusOK
 			if tc.wantErr {
 				want = http.StatusConflict
@@ -95,10 +102,20 @@ func TestValidatePRWorktreeUsesLiveGit(t *testing.T) {
 			}
 			var mcp bytes.Buffer
 			input := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate_pr_worktree","arguments":{"pr_number":42}}}`
-			if rpcErr := prdash.RunMCP(t.Context(),svc,strings.NewReader(input),&mcp); rpcErr != nil { t.Fatal(rpcErr) }
-			var response struct { Result struct { IsError bool `json:"isError"` } `json:"result"` }
-			if decodeErr := json.Unmarshal(mcp.Bytes(),&response); decodeErr != nil { t.Fatal(decodeErr) }
-			if response.Result.IsError != tc.wantErr { t.Fatalf("MCP response: %s",mcp.String()) }
+			if rpcErr := prdash.RunMCP(t.Context(), svc, strings.NewReader(input), &mcp); rpcErr != nil {
+				t.Fatal(rpcErr)
+			}
+			var response struct {
+				Result struct {
+					IsError bool `json:"isError"`
+				} `json:"result"`
+			}
+			if decodeErr := json.Unmarshal(mcp.Bytes(), &response); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if response.Result.IsError != tc.wantErr {
+				t.Fatalf("MCP response: %s", mcp.String())
+			}
 
 		})
 	}

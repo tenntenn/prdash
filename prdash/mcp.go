@@ -169,6 +169,12 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 	}
 
 	switch name {
+	case "get_instruction", "ack_instruction", "claim_instruction", "report_instruction_result", "retry_instruction":
+		return dispatchInstructionMCPTool(svc, name, rawArgs)
+	case "get_config":
+		return svc.EffectiveConfig(), svc.ConfigLoadError()
+	case "reload_config":
+		return svc.ReloadConfig(ctx)
 	case "get_dashboard":
 		return svc.Snapshot(), nil
 
@@ -180,9 +186,13 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		return svc.SyncRepository(ctx, args.Dir)
 
 	case "validate_pr_worktree":
-		var args struct { PRNumber int `json:"pr_number"` }
-		if err := json.Unmarshal(rawArgs,&args); err != nil { return nil,err }
-		return svc.ValidatePRWorktree(ctx,args.PRNumber)
+		var args struct {
+			PRNumber int `json:"pr_number"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, err
+		}
+		return svc.ValidatePRWorktree(ctx, args.PRNumber)
 
 	case "list_pending_instructions":
 		var args struct {
@@ -384,7 +394,9 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 }
 
 func mcpToolsList() []mcpTool {
-	return []mcpTool{
+	return append(instructionMCPTools(), []mcpTool{
+		{Name: "get_config", Description: "Read effective repository settings and default provenance.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
+		{Name: "reload_config", Description: "Reload prdash.yaml for the service repository; already dispatched requests retain their captured settings.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{
 			Name:        "get_dashboard",
 			Description: "Get the complete prdash snapshot for the target repository, including pull requests, stacked chains, sessions, worktrees, model presets, and notifications.",
@@ -401,11 +413,11 @@ func mcpToolsList() []mcpTool {
 			},
 		},
 		{
-			Name: "validate_pr_worktree",
+			Name:        "validate_pr_worktree",
 			Description: "Recheck the PR execution directory and current HEAD before applying queued changes.",
 			InputSchema: map[string]any{
-				"type":"object", "required":[]string{"pr_number"},
-				"properties":map[string]any{"pr_number":map[string]any{"type":"integer"}},
+				"type": "object", "required": []string{"pr_number"},
+				"properties": map[string]any{"pr_number": map[string]any{"type": "integer"}},
 			},
 		},
 		{
@@ -420,7 +432,7 @@ func mcpToolsList() []mcpTool {
 		},
 		{
 			Name:        "ack_instructions",
-			Description: "Mark queued instructions for a session (or 'controller') as handled.",
+			Description: "Deprecated bulk delivery acknowledgment. Use ack_instruction with a specific ID; this never completes execution.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -657,7 +669,7 @@ func mcpToolsList() []mcpTool {
 					"description":      map[string]any{"type": "string"},
 					"branch":           map[string]any{"type": "string"},
 					"base_branch":      map[string]any{"type": "string"},
-					"head_sha": map[string]any{"type":"string","description":"Full target commit SHA"},
+					"head_sha":         map[string]any{"type": "string", "description": "Full target commit SHA"},
 					"session_id":       map[string]any{"type": "string"},
 					"worktree_id":      map[string]any{"type": "string"},
 					"stack_id":         map[string]any{"type": "string"},
@@ -669,5 +681,5 @@ func mcpToolsList() []mcpTool {
 				},
 			},
 		},
-	}
+	}...)
 }
