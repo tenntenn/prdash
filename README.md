@@ -47,6 +47,8 @@ Keep the controller agent session running while you want it to consume instructi
 
 Model presets express a configuration choice, not proof of which model a live agent is using. Changing a dashboard setting alone does not establish that the runtime applied it.
 
+See [PR search](docs/search.md) for searchable fields and matching rules.
+
 ## What you see in the dashboard
 
 - PRs grouped by stack, with CI, review information, and the next actor.

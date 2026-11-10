@@ -2,6 +2,7 @@
   let state = null;
   let activeFilter = "all";
   let activeSessionFilter = "";
+  let searchQuery = "";
   let desktopAlertsEnabled = false;
   const drafts = new Map();
   const openPRs = new Set();
@@ -342,6 +343,7 @@
   }
 
   function prMatchesFilter(pr) {
+    if (!window.prdashSearch.matches(pr, findSession(pr.session_id), findWorktree(pr.worktree_id), searchQuery)) return false;
     if (activeSessionFilter && pr.session_id !== activeSessionFilter) {
       return false;
     }
@@ -389,7 +391,7 @@
     renderWithDrafts(listEl, () => {
       listEl.innerHTML = htmlParts.length
         ? htmlParts.join("")
-        : `<div class="panel">No pull requests match the selected filter.</div>`;
+        : `<div class="panel">No pull requests match your search and filters. Clear the search or select All PRs and All Sessions / Worktrees.</div>`;
     });
   }
 
@@ -669,6 +671,11 @@
     },
     true
   );
+
+  document.getElementById("pr-search").addEventListener("input", (e) => {
+    searchQuery = e.target.value;
+    renderPRList();
+  });
 
   document.addEventListener("change", async (e) => {
     if (e.target.id === "session-filter") {

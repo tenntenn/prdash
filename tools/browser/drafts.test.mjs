@@ -92,7 +92,7 @@ async function setup(t) {
       res.end(JSON.stringify(snap));
       return;
     }
-    const assets = { "/http-client.js": ["http-client.js", "text/javascript"], "/": ["index.html", "text/html"], "/app.js": ["app.js", "text/javascript"], "/styles.css": ["styles.css", "text/css"] };
+    const assets = { "/search.js": ["search.js", "text/javascript"], "/http-client.js": ["http-client.js", "text/javascript"], "/": ["index.html", "text/html"], "/app.js": ["app.js", "text/javascript"], "/styles.css": ["styles.css", "text/css"] };
     const asset = assets[req.url];
     if (!asset) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { "Content-Type": asset[1] });
@@ -266,4 +266,26 @@ test("failed credential refresh preserves submitted draft for explicit retry", a
   assert.equal(f.requests.length, 1);
   assert.equal(f.attempts.length, 2);
   assert.equal(f.attempts[0].body, f.attempts[1].body);
+});
+
+
+test("search combines with session and status filters and survives updates", async (t) => {
+  const f = await setup(t);
+  const query = f.page.locator("#pr-search");
+  await query.fill("#101");
+  assert.equal(await f.page.locator("[data-pr-card]").count(), 1);
+  await f.page.locator("#session-filter").selectOption("other-session");
+  assert.equal(await f.page.locator("[data-pr-card]").count(), 0);
+  await f.page.getByText("No pull requests match your search and filters.", { exact: false }).waitFor();
+  await f.page.locator("#session-filter").selectOption("");
+  await f.page.locator('[data-filter="waiting_for_human"]').click();
+  assert.equal(await f.page.locator("[data-pr-card]").count(), 0);
+  await f.page.locator('[data-filter="all"]').click();
+  f.snap.pull_requests[0].title = "Updated matching PR";
+  f.publish();
+  await f.page.getByText("Updated matching PR", { exact: true }).waitFor();
+  assert.equal(await query.inputValue(), "#101");
+  assert.equal(await f.page.locator("[data-pr-card]").count(), 1);
+  await query.fill("");
+  assert.equal(await f.page.locator("[data-pr-card]").count(), 2);
 });
