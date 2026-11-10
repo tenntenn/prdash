@@ -1312,12 +1312,6 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 	}
 
 	pr.Status = status
-	if status == StatusWaitingForHuman {
-		pr.HasConflicts = false
-		if pr.CIStatus == "failing" || pr.CIStatus == "running" {
-			pr.CIStatus = "passing"
-		}
-	}
 	pr.UpdatedAt = now
 	pr.Thread = append(pr.Thread, ThreadMessage{
 		ID:        s.nextID("msg"),
