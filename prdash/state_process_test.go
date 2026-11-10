@@ -237,11 +237,11 @@ func TestStateCorruptionIsVisibleThroughHTTPAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := prdash.NewHandler(svc)
-	rec := instructionHTTP(t, handler, "GET", "/api/state", "")
+	rec := authenticatedHTTP(t, handler, "GET", "/api/state", "")
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "state_error") {
 		t.Fatalf("HTTP hid corrupt state: %d %s", rec.Code, rec.Body.String())
 	}
-	rec = instructionHTTP(t, handler, "POST", "/api/sessions", `{"id":"new-session"}`)
+	rec = authenticatedHTTP(t, handler, "POST", "/api/sessions", `{"id":"new-session"}`)
 	if rec.Code < 400 {
 		t.Fatalf("HTTP mutation succeeded on corrupt state: %d %s", rec.Code, rec.Body.String())
 	}

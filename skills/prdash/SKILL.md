@@ -176,3 +176,16 @@ Model assignment uses three abstract presets so workflows remain portable across
 - **Pine (`pine`)**: High-capability, deep-reasoning model for complex architecture or security-critical stacks.
 - **Bamboo (`bamboo`)**: Standard balanced model for day-to-day feature implementation and review fixes.
 - **Plum (`plum`)**: Fast, low-cost model for routine tasks, formatting, and lightweight subagents.
+
+## Calling the HTTP API
+
+Use the loopback URL printed by the server. Non-loopback listeners are not
+supported. For a state-changing HTTP request, first fetch `GET /api/auth` with
+`X-Prdash-Client: dashboard`, then send the returned `token` as
+`Authorization: Bearer <token>` and use `Content-Type: application/json`.
+Tokens rotate on server restart and must not be written into repository files.
+Only a 401 response with `code: authentication_required` guarantees that the
+operation was rejected before execution; acquire fresh credentials and retry it
+at most once. Do not automatically resend an operation after a network failure
+or another server error. CLI state-file commands and stdio MCP do not need an
+HTTP token.

@@ -306,7 +306,7 @@ func TestInstructionHTTP(t *testing.T) {
 	msg := queueInstruction(t, svc, "http")
 	handler := prdash.NewHandler(svc)
 	path := "/api/sessions/worker/instructions/" + msg.ID
-	rec := instructionHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"consumer"}`)
+	rec := authenticatedHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"consumer"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("claim HTTP %d: %s", rec.Code, rec.Body.String())
 	}
@@ -318,11 +318,11 @@ func TestInstructionHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec = instructionHTTP(t, handler, http.MethodPost, path+"/result", string(payload))
+	rec = authenticatedHTTP(t, handler, http.MethodPost, path+"/result", string(payload))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("result HTTP %d: %s", rec.Code, rec.Body.String())
 	}
-	rec = instructionHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"other"}`)
+	rec = authenticatedHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"other"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate claim HTTP %d", rec.Code)
 	}
@@ -449,7 +449,7 @@ func TestInstructionStatusChangeDoesNotAcknowledge(t *testing.T) {
 
 // Bootstrap when the server requires authentication. The pre-auth API also
 // works, allowing this test to exercise the independent instruction endpoints.
-func instructionHTTP(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+func authenticatedHTTP(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	authReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/auth", nil)
 	authReq.RemoteAddr = "127.0.0.1:12345"
