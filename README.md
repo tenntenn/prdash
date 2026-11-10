@@ -187,6 +187,6 @@ Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua i` to inst
 
 ```console
 $ task build     # build the prdash binary
-$ task check     # run go fix, goimports, go vet (+ gokuigan), and go test -race
+$ task check     # run go fix, goimports, go vet, and go test -race
 $ task ui:docs   # regenerate screenshots in docs/screenshots/
 ```
