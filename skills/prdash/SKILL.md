@@ -73,6 +73,28 @@ prdash
   prdash status
   ```
 
+### Register and assign a worker before dispatching work
+
+Register the real worktree, agent session, and PR through structured stdin. These commands create dashboard records, not Git worktrees, agent processes, or GitHub PRs. Select the repository explicitly:
+
+```sh
+printf '%s\n' '{"id":"wt-35","path":"/tmp/project-35","branch":"feature/35"}' | prdash register worktree --repo owner/name --json
+printf '%s\n' '{"id":"worker-35","name":"Issue 35 worker","worktree_id":"wt-35"}' | prdash register session --repo owner/name --json
+printf '%s\n' '{"number":35,"title":"Implement feature","branch":"feature/35","base_branch":"main"}' | prdash register pr --repo owner/name --json
+prdash assign --repo owner/name --pr 35 --worktree wt-35 --session worker-35 --json
+```
+
+Registration also accepts `--input /absolute/path/entity.json`. Updates use full service upsert semantics, not merge patches. Use `assign` when only the PR's worktree/session binding should change; it preserves the PR's other state and requires registered destinations.
+
+To request review or queue review-response work for the assigned session:
+
+```sh
+prdash review request --repo owner/name --dir /tmp/project-35 --pr 35 -m 'Check error handling' --json
+printf '%s\n' 'Address review comments and run tests.' | prdash review address --repo owner/name --pr 35 --stdin --json
+```
+
+`request` invokes sbnn; `address` queues an instruction for the worker, which must receive and execute it before reporting results. Do not claim completion merely because dispatch succeeded. `-m` and `--stdin` cannot be combined. Commands exit 0 on success and 1 on error; only parse `--json` output after success. Pass the same `--state /absolute/path/state.json` across processes when using a custom state file.
+
 ### 2. Wait for human instructions (Controller or Worker Session)
 
 Never poll in a tight shell loop. Use `prdash wait` to block until the human sends an instruction or triggers a routine operation in the browser UI:
