@@ -401,6 +401,7 @@ func TestHTTPHandler(t *testing.T) {
 	svc := newSeededService(t)
 	srv := httptest.NewServer(prdash.NewHandler(svc))
 	defer srv.Close()
+	token := acquireHTTPToken(t, srv.URL)
 
 	cases := []struct {
 		name       string
@@ -425,6 +426,7 @@ func TestHTTPHandler(t *testing.T) {
 				t.Fatalf("NewRequestWithContext: %v", err)
 			}
 			if tc.body != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
 				req.Header.Set("Content-Type", "application/json")
 			}
 			resp, err := http.DefaultClient.Do(req)

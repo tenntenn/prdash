@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -32,7 +33,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Dir string `json:"dir"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		snap, syncErr := svc.SyncRepository(r.Context(), body.Dir)
 		if syncErr != nil {
 			writeServiceError(w, syncErr)
@@ -51,7 +55,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			PRNumber int `json:"pr_number"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		acked := svc.AckInstructions(id, body.PRNumber)
 		writeJSON(w, http.StatusOK, map[string]any{"acked": acked})
 	})
@@ -174,7 +181,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Focus string `json:"focus"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		pr, reqErr := svc.RequestReview(r.Context(), num, body.Focus)
 		if reqErr != nil {
 			writeServiceError(w, reqErr)
@@ -192,7 +202,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Instruction string `json:"instruction"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		pr, addrErr := svc.AddressReview(num, body.Instruction)
 		if addrErr != nil {
 			writeServiceError(w, addrErr)
@@ -374,7 +387,10 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			ID string `json:"id"`
 		}
-		_ = decodeJSON(r, &body)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
+			return
+		}
 		if readErr := svc.MarkNotificationRead(body.ID); readErr != nil {
 			writeServiceError(w, readErr)
 			return
@@ -425,7 +441,7 @@ func NewHandler(svc *Service) http.Handler {
 	})
 
 	mux.Handle("/", fileServer)
-	return mux
+	return protectLocalHTTP(mux)
 }
 
 func parsePRNumber(r *http.Request) (int, error) {
@@ -440,7 +456,14 @@ func parsePRNumber(r *http.Request) (int, error) {
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
 	dec := json.NewDecoder(r.Body)
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
