@@ -31,6 +31,8 @@ jobs:
         run: npm ci --prefix "$GITHUB_WORKSPACE/tools/browser"
       - name: Install Chromium
         run: node "$GITHUB_WORKSPACE/tools/browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test PR search matching
+        run: node "$GITHUB_WORKSPACE/tools/search.test.mjs"
       - name: Test HTTP credential recovery
         run: node "$GITHUB_WORKSPACE/tools/http-client.test.mjs"
       - name: Test draft preservation in the browser
