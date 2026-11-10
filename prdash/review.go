@@ -205,9 +205,9 @@ func (s *Service) beginReview(ctx context.Context, number int, focus, previewKey
 		s.mu.Unlock()
 		return SBNNReviewRequest{}, nil, resolveErr
 	}
-	if current.ReviewerSessionID != plan.ReviewerSessionID || current.BaseBranch != plan.BaseBranch || current.HeadBranch != plan.HeadBranch || (current.TargetCommit != "" && current.TargetCommit != plan.TargetCommit) {
+	if current.RequestedModel != plan.RequestedModel || current.Instructions != plan.Instructions || current.Agent != plan.Agent || current.SessionRole != plan.SessionRole || current.Focus != plan.Focus || current.ReviewerSessionID != plan.ReviewerSessionID || current.BaseBranch != plan.BaseBranch || current.HeadBranch != plan.HeadBranch || (current.TargetCommit != "" && current.TargetCommit != plan.TargetCommit) {
 		s.mu.Unlock()
-		return SBNNReviewRequest{}, nil, fmt.Errorf("%w: reviewer or target changed; preview again", ErrReviewerUnavailable)
+		return SBNNReviewRequest{}, nil, fmt.Errorf("%w: reviewer, policy or target changed; preview again", ErrReviewerUnavailable)
 	}
 	if s.activeReviews[number] {
 		s.mu.Unlock()

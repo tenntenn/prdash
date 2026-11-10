@@ -229,3 +229,30 @@ func TestAmbiguousAndDisconnectedReviewers(t *testing.T) {
 		t.Fatal("unavailable reviewer was invoked")
 	}
 }
+
+func TestReviewPreviewRejectsChangedModelPreset(t *testing.T) {
+	t.Parallel()
+	runtime := &sampleReviewRuntime{applied: "sample-model"}
+	_, root := reviewService(t, "separate", runtime)
+	writeRepoConfig(t, root, "review:\n  agent: sample-provider\n  model_tier: bamboo\n")
+	svc := prdash.NewService(prdash.Options{WorkDir: root, StateFile: filepath.Join(root, "state.json"), ReviewRuntimes: map[string]prdash.ReviewRuntimeBinding{"sample-reviewer": {Provider: "sample-provider", Runtime: runtime, SupportedModels: []string{"sample-model", "sample-next"}}}})
+	if _, err := svc.UpdateModelConfig(prdash.ModelPresetConfig{Bamboo: "sample-model"}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.PreviewReview(t.Context(), 42, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateModelConfig(prdash.ModelPresetConfig{Bamboo: "sample-next"}); err != nil {
+		t.Fatal(err)
+	}
+	if svc.EffectiveConfig().Revision != plan.Config.Revision {
+		t.Fatal("test must change only the runtime model preset")
+	}
+	if _, err := svc.RequestReviewWithPreview(t.Context(), 42, "", plan.PreviewKey); !errors.Is(err, prdash.ErrReviewerUnavailable) {
+		t.Fatalf("changed model preview error=%v", err)
+	}
+	if len(runtime.requests) != 0 {
+		t.Fatal("stale model choice dispatched")
+	}
+}
