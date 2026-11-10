@@ -166,30 +166,33 @@ type ThreadMessage struct {
 
 // PullRequest represents a pull request created and maintained by an agent session.
 type PullRequest struct {
-	ID             string          `json:"id"`
-	Number         int             `json:"number"`
-	Title          string          `json:"title"`
-	Description    string          `json:"description"`
-	Branch         string          `json:"branch"`
-	BaseBranch     string          `json:"base_branch"`
-	SessionID      string          `json:"session_id"`
-	WorktreeID     string          `json:"worktree_id"`
-	StackID        string          `json:"stack_id,omitempty"`
-	StackOrder     int             `json:"stack_order,omitempty"`
-	StackSize      int             `json:"stack_size,omitempty"`
-	ParentPRNumber int             `json:"parent_pr_number,omitempty"`
-	Status         PRStatus        `json:"status"`
-	AutoMode       bool            `json:"auto_mode"`
-	ModelTier      ModelTier       `json:"model_tier"`
-	ResolvedModel  string          `json:"resolved_model"`
-	CIStatus       string          `json:"ci_status"` // "passing", "running", "failing"
-	HasConflicts   bool            `json:"has_conflicts"`
-	ReviewStatus   string          `json:"review_status"` // "approved", "changes_requested", "review_pending"
-	Additions      int             `json:"additions"`
-	Deletions      int             `json:"deletions"`
-	ChangedFiles   int             `json:"changed_files"`
-	Thread         []ThreadMessage `json:"thread"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	HeadSHA        string             `json:"head_sha,omitempty"`
+	SBNNGroupURL   string             `json:"sbnn_group_url,omitempty"`
+	SBNNReviews    []SBNNReviewResult `json:"sbnn_reviews,omitempty"`
+	ID             string             `json:"id"`
+	Number         int                `json:"number"`
+	Title          string             `json:"title"`
+	Description    string             `json:"description"`
+	Branch         string             `json:"branch"`
+	BaseBranch     string             `json:"base_branch"`
+	SessionID      string             `json:"session_id"`
+	WorktreeID     string             `json:"worktree_id"`
+	StackID        string             `json:"stack_id,omitempty"`
+	StackOrder     int                `json:"stack_order,omitempty"`
+	StackSize      int                `json:"stack_size,omitempty"`
+	ParentPRNumber int                `json:"parent_pr_number,omitempty"`
+	Status         PRStatus           `json:"status"`
+	AutoMode       bool               `json:"auto_mode"`
+	ModelTier      ModelTier          `json:"model_tier"`
+	ResolvedModel  string             `json:"resolved_model"`
+	CIStatus       string             `json:"ci_status"` // "passing", "running", "failing"
+	HasConflicts   bool               `json:"has_conflicts"`
+	ReviewStatus   string             `json:"review_status"` // "approved", "changes_requested", "review_pending"
+	Additions      int                `json:"additions"`
+	Deletions      int                `json:"deletions"`
+	ChangedFiles   int                `json:"changed_files"`
+	Thread         []ThreadMessage    `json:"thread"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 // StackGroup represents an ordered chain of stacked pull requests or a single standalone pull request.

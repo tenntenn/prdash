@@ -163,6 +163,7 @@ type ghPRItem struct {
 	Number            int              `json:"number"`
 	Title             string           `json:"title"`
 	Body              string           `json:"body"`
+	HeadRefOid        string           `json:"headRefOid"`
 	HeadRefName       string           `json:"headRefName"`
 	BaseRefName       string           `json:"baseRefName"`
 	Additions         int              `json:"additions"`
@@ -186,7 +187,7 @@ func DiscoverPullRequests(ctx context.Context, repoFullName, dir string, default
 		"pr", "list",
 		"--state", "open",
 		"--limit", "100",
-		"--json", "number,title,body,headRefName,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
+		"--json", "number,title,body,headRefOid,headRefName,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
 	}
 	if strings.Contains(repoFullName, "/") {
 		args = append(args, "--repo", repoFullName)
@@ -234,6 +235,7 @@ func ParseGitHubPRListJSON(data []byte, defaultBranch string, worktrees []Worktr
 			Title:         item.Title,
 			Description:   item.Body,
 			Branch:        item.HeadRefName,
+			HeadSHA:       item.HeadRefOid,
 			BaseBranch:    item.BaseRefName,
 			WorktreeID:    wt.ID,
 			SessionID:     wt.SessionID,

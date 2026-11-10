@@ -455,6 +455,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrStaleReview), errors.Is(err, ErrReviewWorktreeUnavailable):
+		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
