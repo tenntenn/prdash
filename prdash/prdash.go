@@ -124,16 +124,27 @@ type Worktree struct {
 
 // SessionMessage represents an instruction or report exchanged with an agent session.
 type SessionMessage struct {
-	RequestedModel string    `json:"requested_model,omitempty"`
-	ModelSource    string    `json:"model_source,omitempty"`
-	ID             string    `json:"id"`
-	From           string    `json:"from"`
-	To             string    `json:"to"`
-	Direction      string    `json:"direction"` // "instruction" or "report"
-	PRNumber       int       `json:"pr_number,omitempty"`
-	Text           string    `json:"text"`
-	Handled        bool      `json:"handled,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	RequestedModel     string           `json:"requested_model,omitempty"`
+	ModelSource        string           `json:"model_source,omitempty"`
+	InstructionID      string           `json:"instruction_id,omitempty"`
+	TargetCommit       string           `json:"target_commit,omitempty"`
+	ExecutionState     InstructionState `json:"execution_state,omitempty"`
+	ConsumerID         string           `json:"consumer_id,omitempty"`
+	Attempt            int              `json:"attempt,omitempty"`
+	Result             string           `json:"result,omitempty"`
+	ResultStatus       PRStatus         `json:"result_status,omitempty"`
+	ResultApplied      bool             `json:"result_applied,omitempty"`
+	ExecutionUpdatedAt time.Time        `json:"execution_updated_at"`
+
+	AppliedConfig *EffectiveConfig `json:"applied_config,omitempty"`
+	ID            string           `json:"id"`
+	From          string           `json:"from"`
+	To            string           `json:"to"`
+	Direction     string           `json:"direction"` // "instruction" or "report"
+	PRNumber      int              `json:"pr_number,omitempty"`
+	Text          string           `json:"text"`
+	Handled       bool             `json:"handled,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
 }
 
 // Session represents an AI coding agent session bound to a git worktree,
@@ -157,18 +168,23 @@ type Session struct {
 
 // ThreadMessage represents a message or event in a pull request's interaction thread.
 type ThreadMessage struct {
-	ID        string    `json:"id"`
-	Author    string    `json:"author"`
-	Role      string    `json:"role"` // "human", "session", "controller", "sbnn", "system"
-	Kind      string    `json:"kind"` // "message", "review_comment", "review_request", "review_fix", "routine_action", "status_change"
-	Text      string    `json:"text"`
-	FilePath  string    `json:"file_path,omitempty"`
-	Line      int       `json:"line,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	AppliedConfig *EffectiveConfig `json:"applied_config,omitempty"`
+	ID            string           `json:"id"`
+	Author        string           `json:"author"`
+	Role          string           `json:"role"` // "human", "session", "controller", "sbnn", "system"
+	Kind          string           `json:"kind"` // "message", "review_comment", "review_request", "review_fix", "routine_action", "status_change"
+	Text          string           `json:"text"`
+	FilePath      string           `json:"file_path,omitempty"`
+	Line          int              `json:"line,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
 }
 
 // PullRequest represents a pull request created and maintained by an agent session.
 type PullRequest struct {
+	GitHubState    string          `json:"github_state"` // open, merged, closed, unknown
+	IsDraft        bool            `json:"is_draft"`
+	Mergeability   string          `json:"mergeability"` // mergeable, conflicting, unknown
+	HeadSHA        string          `json:"head_sha,omitempty"`
 	ID             string          `json:"id"`
 	Number         int             `json:"number"`
 	Title          string          `json:"title"`
@@ -229,8 +245,21 @@ type DashboardSummary struct {
 	ManagedWorktrees int `json:"managed_worktrees"`
 }
 
+// SyncStatus describes the most recent attempt by this service instance.
+type SyncStatus struct {
+	AttemptedAt   time.Time `json:"attempted_at"`
+	CompletedAt   time.Time `json:"completed_at"`
+	NextAllowedAt time.Time `json:"next_allowed_at"`
+	GitError      string    `json:"git_error,omitempty"`
+	GitHubError   string    `json:"github_error,omitempty"`
+	Truncated     bool      `json:"truncated"`
+}
+
 // Snapshot contains the complete state of the dashboard for a target repository.
 type Snapshot struct {
+	Sync              SyncStatus        `json:"sync"`
+	Config            EffectiveConfig   `json:"config"`
+	ConfigError       string            `json:"config_error,omitempty"`
 	Repository        RepositoryInfo    `json:"repository"`
 	ModelConfig       ModelPresetConfig `json:"model_config"`
 	ControllerSession Session           `json:"controller_session"`

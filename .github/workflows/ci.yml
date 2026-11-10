@@ -17,3 +17,23 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test -race ./...
+
+  browser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tools/browser/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix "$GITHUB_WORKSPACE/tools/browser"
+      - name: Install Chromium
+        run: node "$GITHUB_WORKSPACE/tools/browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test PR search matching
+        run: node "$GITHUB_WORKSPACE/tools/search.test.mjs"
+      - name: Test HTTP credential recovery
+        run: node "$GITHUB_WORKSPACE/tools/http-client.test.mjs"
+      - name: Test draft preservation in the browser
+        run: node --test "$GITHUB_WORKSPACE/tools/browser/drafts.test.mjs"
