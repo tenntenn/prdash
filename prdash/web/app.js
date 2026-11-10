@@ -29,6 +29,36 @@
     applySnapshot(snap);
   }
 
+  function renderModelRuntime(session) {
+    const runtime = session.model_runtime || {};
+    const caps = runtime.capabilities || {};
+    const observation = runtime.observation || {};
+    const application = runtime.application || {};
+    const statuses = {
+      saved_not_applied: "Saved, not applied",
+      unsupported: "Unsupported by this runtime",
+      applying: "Applying requested model",
+      scheduled: "Accepted for next turn (current turn unchanged)",
+      applied: "Applied to current turn (runtime confirmed)",
+      failed: "Application failed",
+      superseded: "Older request accepted; latest request not applied",
+    };
+    const observed = observation.model
+      ? `${observation.model}${observation.turn_id ? ` · turn ${observation.turn_id}` : ""} · ${observation.observed_at || "time unknown"}`
+      : "Unknown — no runtime observation";
+    const id = escapeHTML(session.id);
+    return `<div>Requested: ${escapeHTML(session.resolved_model)} · Subagent request: ${escapeHTML(session.resolved_subagent_model)} (save only)</div>
+      <div>Last observed: ${escapeHTML(observed)}</div>
+      <div>Runtime: ${runtime.connection === "attached" ? `Attached (${escapeHTML(runtime.provider || "provider unspecified")})` : "Unconnected"} · ${escapeHTML(statuses[application.status] || "Saved, not applied")}</div>
+      ${application.detail ? `<div>${escapeHTML(application.detail)}</div>` : ""}
+      ${runtime.observation_error ? `<div>Observation failed: ${escapeHTML(runtime.observation_error)}</div>` : ""}
+      <div class="tier-row">
+        <button type="button" class="btn btn-secondary btn-sm" data-model-refresh="${id}" ${caps.observe ? "" : "disabled"}>Refresh observed model</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-model-apply="${id}" data-model-scope="current_turn" ${caps.apply_current_turn ? "" : "disabled"}>Apply current turn</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-model-apply="${id}" data-model-scope="next_turn" ${caps.apply_next_turn ? "" : "disabled"}>Apply next turn</button>
+      </div>`;
+  }
+
   function applySnapshot(snap) {
     if (initialLoadComplete && Array.isArray(snap.notifications)) {
       for (const n of snap.notifications) {
@@ -135,8 +165,7 @@
     const subSel = document.getElementById("controller-subagent-tier");
     modelSel.value = ctrl.model_tier;
     subSel.value = ctrl.subagent_model_tier;
-    document.getElementById("controller-resolved-model").textContent =
-      `Active: ${ctrl.resolved_model} · Subagents: ${ctrl.resolved_subagent_model}`;
+    document.getElementById("controller-resolved-model").innerHTML = renderModelRuntime(ctrl);
 
     const feed = document.getElementById("controller-messages");
     const recent = (ctrl.messages || []).slice(-6).reverse();
@@ -203,20 +232,20 @@
           <div class="controller-task">${escapeHTML(s.active_task)}</div>
           <div class="tier-row">
             <label class="tier-label">
-              <span>Session Tier</span>
+              <span>Requested Session Tier</span>
               <select class="select-compact" data-session-tier="${escapeHTML(s.id)}">
                 ${formatTierOptions(s.model_tier)}
               </select>
             </label>
             <label class="tier-label">
-              <span>Subagent Tier</span>
+              <span>Requested Subagent Tier</span>
               <select class="select-compact" data-subagent-tier="${escapeHTML(s.id)}">
                 ${formatTierOptions(s.subagent_model_tier)}
               </select>
             </label>
           </div>
           <div class="resolved-model-hint">
-            Model: ${escapeHTML(s.resolved_model)} (Sub: ${escapeHTML(s.resolved_subagent_model)})
+            ${renderModelRuntime(s)}
           </div>
           <form class="instruction-form" data-session-form="${escapeHTML(s.id)}">
             <input type="text" name="text" placeholder="Direct instruction to ${escapeHTML(s.id)}..." required>
@@ -341,7 +370,7 @@
                 <input type="checkbox" data-auto-toggle="${pr.number}" ${pr.auto_mode ? "checked" : ""}>
                 <span>Auto-Mode</span>
               </label>
-              <select class="select-compact" data-pr-tier="${pr.number}" aria-label="Model tier for PR #${pr.number}">
+              <select class="select-compact" data-pr-tier="${pr.number}" aria-label="Requested model tier for PR #${pr.number}">
                 ${formatTierOptions(pr.model_tier)}
               </select>
             </div>
@@ -354,7 +383,7 @@
               <span class="meta-pill">Worktree: ${escapeHTML(wt ? wt.path : pr.worktree_id)}</span>
               <span class="meta-pill">Diff: +${pr.additions} / -${pr.deletions} (${pr.changed_files} files)</span>
               <span class="meta-pill">Review: ${escapeHTML(pr.review_status)}</span>
-              <span class="meta-pill">Model: ${escapeHTML(pr.resolved_model)} (${escapeHTML(pr.model_tier)})</span>
+              <span class="meta-pill">Requested: ${escapeHTML(pr.resolved_model)} (${escapeHTML(pr.model_tier)}) · save only</span>
             </div>
 
             <div class="pr-actions-grid">
@@ -439,6 +468,20 @@
 
   // Event delegation
   document.addEventListener("click", async (e) => {
+    if (e.target.matches("[data-model-refresh], [data-model-apply]")) {
+      const id = e.target.dataset.modelRefresh || e.target.dataset.modelApply;
+      const action = e.target.dataset.modelRefresh ? "refresh" : "apply";
+      const scope = e.target.dataset.modelScope;
+      e.target.disabled = true;
+      try {
+        await apiPost(`/api/sessions/${encodeURIComponent(id)}/model-runtime/${action}`, scope ? { scope } : {});
+      } catch (err) {
+        showToast("Model runtime", err.message);
+        await refreshState();
+      }
+      return;
+    }
+
     // Prevent interactive controls inside <summary> from toggling details open/close
     if (e.target.closest("[data-stop-summary-toggle]") && e.target.matches("select, option, input, label, span")) {
       if (!e.target.matches("input[type='checkbox']")) {

@@ -89,7 +89,7 @@
 
         <div class="tier-row">
           <label class="tier-label">
-            <span>Session Model</span>
+            <span>Requested Session Model</span>
             <select id="controller-model-tier" class="select-compact">
               <option value="pine">Pine (High)</option>
               <option value="bamboo">Bamboo (Standard)</option>
@@ -97,7 +97,7 @@
             </select>
           </label>
           <label class="tier-label">
-            <span>Subagent Model</span>
+            <span>Requested Subagent Model</span>
             <select id="controller-subagent-tier" class="select-compact">
               <option value="pine">Pine (High)</option>
               <option value="bamboo">Bamboo (Standard)</option>
@@ -157,7 +157,7 @@
         <button type="button" class="btn btn-ghost btn-sm" id="close-model-settings">Close</button>
       </div>
       <p class="modal-desc">
-        Configure which concrete model identifiers correspond to the three preset tiers across sessions and subagents.
+        Configure requested model identifiers for each tier. Saving presets does not change a running session; subagent presets are save-only.
       </p>
       <div class="form-field">
         <label for="preset-pine">

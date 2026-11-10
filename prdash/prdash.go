@@ -124,32 +124,35 @@ type Worktree struct {
 
 // SessionMessage represents an instruction or report exchanged with an agent session.
 type SessionMessage struct {
-	ID        string    `json:"id"`
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	Direction string    `json:"direction"` // "instruction" or "report"
-	PRNumber  int       `json:"pr_number,omitempty"`
-	Text      string    `json:"text"`
-	Handled   bool      `json:"handled,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	RequestedModel string    `json:"requested_model,omitempty"`
+	ModelSource    string    `json:"model_source,omitempty"`
+	ID             string    `json:"id"`
+	From           string    `json:"from"`
+	To             string    `json:"to"`
+	Direction      string    `json:"direction"` // "instruction" or "report"
+	PRNumber       int       `json:"pr_number,omitempty"`
+	Text           string    `json:"text"`
+	Handled        bool      `json:"handled,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // Session represents an AI coding agent session bound to a git worktree,
 // or the controller session running the dashboard itself.
 type Session struct {
-	ID                    string           `json:"id"`
-	Name                  string           `json:"name"`
-	Role                  string           `json:"role"` // "controller" or "worker"
-	AgentType             string           `json:"agent_type"`
-	WorktreeID            string           `json:"worktree_id,omitempty"`
-	Status                string           `json:"status"` // "idle", "working", "coordinating"
-	ModelTier             ModelTier        `json:"model_tier"`
-	ResolvedModel         string           `json:"resolved_model"`
-	SubagentModelTier     ModelTier        `json:"subagent_model_tier"`
-	ResolvedSubagentModel string           `json:"resolved_subagent_model"`
-	ActiveTask            string           `json:"active_task"`
-	Messages              []SessionMessage `json:"messages"`
-	UpdatedAt             time.Time        `json:"updated_at"`
+	ModelRuntime          ModelRuntimeState `json:"model_runtime"`
+	ID                    string            `json:"id"`
+	Name                  string            `json:"name"`
+	Role                  string            `json:"role"` // "controller" or "worker"
+	AgentType             string            `json:"agent_type"`
+	WorktreeID            string            `json:"worktree_id,omitempty"`
+	Status                string            `json:"status"` // "idle", "working", "coordinating"
+	ModelTier             ModelTier         `json:"model_tier"`
+	ResolvedModel         string            `json:"resolved_model"`
+	SubagentModelTier     ModelTier         `json:"subagent_model_tier"`
+	ResolvedSubagentModel string            `json:"resolved_subagent_model"`
+	ActiveTask            string            `json:"active_task"`
+	Messages              []SessionMessage  `json:"messages"`
+	UpdatedAt             time.Time         `json:"updated_at"`
 }
 
 // ThreadMessage represents a message or event in a pull request's interaction thread.

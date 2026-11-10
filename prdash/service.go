@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -23,25 +24,29 @@ var (
 
 // Options configures a new Service instance.
 type Options struct {
-	Repository  string
-	WorkDir     string
-	StateFile   string
-	ModelConfig *ModelPresetConfig
-	Reviewer    SBNNReviewer
+	ModelRuntimes map[string]ModelRuntimeBinding
+	Repository    string
+	WorkDir       string
+	StateFile     string
+	ModelConfig   *ModelPresetConfig
+	Reviewer      SBNNReviewer
 }
 
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
-	mu          sync.RWMutex
-	seq         atomic.Int64
-	stateFile   string
-	workDir     string
-	stateRev    int64
-	dirty       bool
-	repo        RepositoryInfo
-	modelConfig ModelPresetConfig
-	reviewer    SBNNReviewer
+	modelRuntimes      map[string]ModelRuntimeBinding
+	modelRuntimeStates map[string]ModelRuntimeState
+	modelRuntimeBusy   map[string]bool
+	mu                 sync.RWMutex
+	seq                atomic.Int64
+	stateFile          string
+	workDir            string
+	stateRev           int64
+	dirty              bool
+	repo               RepositoryInfo
+	modelConfig        ModelPresetConfig
+	reviewer           SBNNReviewer
 
 	controller    Session
 	worktrees     []Worktree
@@ -107,6 +112,10 @@ func NewService(opts Options) *Service {
 		notifications: make([]Notification, 0),
 		subscribers:   make(map[int64]chan Snapshot),
 	}
+	svc.modelRuntimes = make(map[string]ModelRuntimeBinding, len(opts.ModelRuntimes))
+	maps.Copy(svc.modelRuntimes, opts.ModelRuntimes)
+	svc.modelRuntimeStates = make(map[string]ModelRuntimeState)
+	svc.modelRuntimeBusy = make(map[string]bool)
 	svc.seq.Store(1000)
 	if svc.stateFile != "" {
 		if !svc.reloadStateFileIfChangedLocked() {
@@ -307,14 +316,14 @@ func (s *Service) snapshotLocked() Snapshot {
 		s.saveStateFileLocked()
 		s.dirty = false
 	}
-	controller := cloneSession(s.controller)
+	controller := s.sessionWithModelRuntimeLocked(s.controller)
 	worktrees := slices.Clone(s.worktrees)
 	if worktrees == nil {
 		worktrees = make([]Worktree, 0)
 	}
 	sessions := make([]Session, len(s.sessions))
 	for i, sess := range s.sessions {
-		sessions[i] = cloneSession(sess)
+		sessions[i] = s.sessionWithModelRuntimeLocked(sess)
 	}
 	prs := make([]PullRequest, len(s.prs))
 	for i, pr := range s.prs {
@@ -478,6 +487,15 @@ func (s *Service) recordInterSessionLocked(from, to, direction string, prNumber 
 		PRNumber:  prNumber,
 		Text:      text,
 		CreatedAt: now,
+	}
+	if direction == "instruction" {
+		if pr, _ := s.findPRLocked(prNumber); pr != nil {
+			msg.RequestedModel = pr.ResolvedModel
+			msg.ModelSource = "pull_request"
+		} else if sess, _ := s.findSessionLocked(to); sess != nil {
+			msg.RequestedModel = sess.ResolvedModel
+			msg.ModelSource = "session"
+		}
 	}
 	s.controller.Messages = append(s.controller.Messages, msg)
 	s.controller.UpdatedAt = now
@@ -1068,6 +1086,7 @@ func (s *Service) SetSessionModelTier(sessionID string, tier ModelTier, subagent
 	}
 
 	s.mu.Lock()
+	s.dirty = true
 	sess, _ := s.findSessionLocked(sessionID)
 	if sess == nil {
 		s.mu.Unlock()
@@ -1081,15 +1100,9 @@ func (s *Service) SetSessionModelTier(sessionID string, tier ModelTier, subagent
 	sess.ResolvedSubagentModel = s.modelConfig.Resolve(subagentTier)
 	sess.UpdatedAt = now
 
-	for i := range s.prs {
-		if s.prs[i].SessionID == sess.ID {
-			s.prs[i].ModelTier = tier
-			s.prs[i].ResolvedModel = s.modelConfig.Resolve(tier)
-			s.prs[i].UpdatedAt = now
-		}
-	}
+	s.markModelSavedLocked(sess.ID)
 
-	res := cloneSession(*sess)
+	res := s.sessionWithModelRuntimeLocked(*sess)
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 
@@ -1097,13 +1110,14 @@ func (s *Service) SetSessionModelTier(sessionID string, tier ModelTier, subagent
 	return res, nil
 }
 
-// SetPRModelTier updates the Pine/Bamboo/Plum model preset for a pull request and its session.
+// SetPRModelTier updates the Pine/Bamboo/Plum model preset for a pull request only; it never changes the destination session.
 func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, error) {
 	if !ValidModelTier(tier) {
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, tier)
 	}
 
 	s.mu.Lock()
+	s.dirty = true
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
 		s.mu.Unlock()
@@ -1115,18 +1129,12 @@ func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, err
 	pr.ResolvedModel = s.modelConfig.Resolve(tier)
 	pr.UpdatedAt = now
 
-	if sess, _ := s.findSessionLocked(pr.SessionID); sess != nil {
-		sess.ModelTier = tier
-		sess.ResolvedModel = s.modelConfig.Resolve(tier)
-		sess.UpdatedAt = now
-	}
-
 	pr.Thread = append(pr.Thread, ThreadMessage{
 		ID:        s.nextID("msg"),
 		Author:    "Dashboard Orchestrator",
 		Role:      "controller",
 		Kind:      "status_change",
-		Text:      fmt.Sprintf("Switched model tier preset to %s (%s).", strings.ToUpper(string(tier)), pr.ResolvedModel),
+		Text:      fmt.Sprintf("Saved requested PR model tier %s (%s); runtime unchanged.", strings.ToUpper(string(tier)), pr.ResolvedModel),
 		CreatedAt: now,
 	})
 
@@ -1155,9 +1163,11 @@ func (s *Service) UpdateModelConfig(cfg ModelPresetConfig) (ModelPresetConfig, e
 
 	s.controller.ResolvedModel = s.modelConfig.Resolve(s.controller.ModelTier)
 	s.controller.ResolvedSubagentModel = s.modelConfig.Resolve(s.controller.SubagentModelTier)
+	s.markModelSavedLocked(s.controller.ID)
 	for i := range s.sessions {
 		s.sessions[i].ResolvedModel = s.modelConfig.Resolve(s.sessions[i].ModelTier)
 		s.sessions[i].ResolvedSubagentModel = s.modelConfig.Resolve(s.sessions[i].SubagentModelTier)
+		s.markModelSavedLocked(s.sessions[i].ID)
 	}
 	for i := range s.prs {
 		s.prs[i].ResolvedModel = s.modelConfig.Resolve(s.prs[i].ModelTier)
@@ -1190,7 +1200,7 @@ func (s *Service) SendDirectSessionInstruction(sessionID string, text string) (S
 	sess.Status = "working"
 	s.recordInterSessionLocked(s.controller.ID, sess.ID, "instruction", 0, text, now)
 
-	res := cloneSession(*sess)
+	res := s.sessionWithModelRuntimeLocked(*sess)
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 
@@ -1222,7 +1232,7 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	s.controller.Status = "working"
 	s.controller.UpdatedAt = now
 
-	res := cloneSession(s.controller)
+	res := s.sessionWithModelRuntimeLocked(s.controller)
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 
@@ -1365,6 +1375,7 @@ func (s *Service) UpsertWorktree(wt Worktree) (Worktree, error) {
 
 // UpsertSession registers a new worker session or updates an existing session by ID.
 func (s *Service) UpsertSession(sess Session) (Session, error) {
+	sess.ModelRuntime = ModelRuntimeState{} // Only the configured runtime can provide observations.
 	sess.ID = strings.TrimSpace(sess.ID)
 	if sess.ID == "" {
 		return Session{}, errors.New("session id is required")
@@ -1410,7 +1421,8 @@ func (s *Service) UpsertSession(sess Session) (Session, error) {
 		s.sessions = append(s.sessions, sess)
 	}
 
-	res := cloneSession(sess)
+	s.markModelSavedLocked(sess.ID)
+	res := s.sessionWithModelRuntimeLocked(sess)
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 
