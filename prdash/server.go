@@ -17,6 +17,7 @@ var webEmbedFS embed.FS
 // NewHandler returns an http.Handler serving the prdash web UI and JSON/SSE APIs.
 func NewHandler(svc *Service) http.Handler {
 	mux := http.NewServeMux()
+	registerInstructionHandlers(mux, svc)
 
 	webSub, err := fs.Sub(webEmbedFS, "web")
 	if err != nil {
@@ -469,9 +470,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrConfigValidation):
 		writeError(w, http.StatusBadRequest, err)
-	case errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
+	case errors.Is(err, ErrInstructionNotFound), errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
+	case errors.Is(err, ErrInstructionSession), errors.Is(err, ErrInstructionConflict):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, ErrInstructionInput), errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
 		writeError(w, http.StatusBadRequest, err)
 	default:
 		writeError(w, http.StatusInternalServerError, err)
