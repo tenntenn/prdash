@@ -152,3 +152,34 @@ fi
 		t.Fatalf("missing reviewer finding: %s", out.String())
 	}
 }
+
+func TestMutationCLIRejectsInvalidConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prdash.yaml"), []byte("version: 99\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		args  []string
+		input string
+	}{
+		{"register", []string{"register", "session"}, `{"id":"worker"}`},
+		{"assign", []string{"assign", "--pr", "35", "--worktree", "wt", "--session", "worker"}, ""},
+		{"review", []string{"review", "address", "--pr", "35"}, ""},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			args := append(tt.args, "--repo", "example/sample", "--dir", dir, "--state", "off")
+			var out, stderr bytes.Buffer
+			err := run(t.Context(), args, strings.NewReader(tt.input), &out, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "version") {
+				t.Fatalf("expected config error, got %v", err)
+			}
+		})
+	}
+}

@@ -27,6 +27,9 @@ func (t *commandTarget) flags(fs *flag.FlagSet) {
 
 func (t commandTarget) open(ctx context.Context) (*prdash.Service, error) {
 	svc := openCLIService(ctx, t.repo, t.dir, t.state)
+	if err := svc.ConfigLoadError(); err != nil {
+		return nil, err
+	}
 	if requested := strings.TrimSpace(t.repo); requested != "" {
 		if actual := svc.Snapshot().Repository.FullName; actual != requested {
 			return nil, fmt.Errorf("state belongs to repository %q, not requested repository %q", actual, requested)

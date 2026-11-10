@@ -51,6 +51,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return runAssignCmd(ctx, args[1:], stdout, stderr)
 		case "review":
 			return runReviewCmd(ctx, args[1:], stdin, stdout, stderr)
+		case "config":
+			return runConfigCmd(ctx, args[1:], stdout, stderr)
 		case "skill":
 			return runSkill(args[1:], stdout, stderr)
 		case "status":
@@ -106,6 +108,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Plum:   *plumModel,
 		},
 	})
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	if !*noSync && len(svc.Snapshot().PullRequests) == 0 {
 		_, _ = svc.SyncRepository(ctx, *workDir)
 	}
@@ -204,6 +209,9 @@ func runStatusCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	snap := svc.Snapshot()
 	if *asJSON {
 		return writePrettyJSON(stdout, snap)
@@ -239,6 +247,9 @@ func runSyncCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	snap, err := svc.SyncRepository(ctx, *dir)
 	if err != nil {
 		return err
@@ -276,6 +287,9 @@ func runInstructionsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	pending := svc.PendingInstructions(*sessionID)
 	if *ack && len(pending) > 0 {
 		svc.AckInstructions(*sessionID, *prNum)
@@ -312,6 +326,9 @@ func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 
 	waitCtx := ctx
 	if *timeout > 0 {
@@ -375,6 +392,9 @@ func runReportCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return errors.New("--pr is required")
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	sid := strings.TrimSpace(*sessionID)
 	if sid == "" {
 		if pr, err := svc.GetPR(*prNum); err == nil {
@@ -413,6 +433,9 @@ func runSendCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.ConfigLoadError(); err != nil {
+		return err
+	}
 	switch {
 	case *prNum > 0:
 		pr, err := svc.SendPRMessage(*prNum, *author, *message)
@@ -531,4 +554,22 @@ func installSkill(dir string, force bool, stderr io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stderr, "prdash: installed the prdash skill (%d file(s)) into %s\n", written, root)
 	return nil
+}
+
+// runConfigCmd uses the same loader as HTTP/MCP startup without executing work.
+func runConfigCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash config", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("dir", "", "Target repository directory")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	cfg, err := prdash.LoadRepoConfig(ctx, *dir)
+	if err != nil {
+		return err
+	}
+	return writePrettyJSON(stdout, cfg)
 }
