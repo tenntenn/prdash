@@ -1,42 +1,83 @@
 ---
 name: prdash
-description: Launch and operate the prdash command-center dashboard to coordinate pull requests, git worktrees, and AI agent sessions for a target repository. Works across any MCP- or CLI-capable coding agent.
+description: Launch, operate, install, and update the prdash command-center dashboard to coordinate pull requests, git worktrees, and AI agent sessions for a target repository. Works across any coding agent that reads skill files or uses MCP.
+license: MIT
 ---
 
-# prdash Skill
+# Coordinating pull requests and agent sessions with prdash
 
-`prdash` is a repository-scoped command-center dashboard that links **Git Worktrees**, **Agent Sessions**, and **Pull Requests** (including stacked PR chains).
+`prdash` is a repository-scoped command-center web dashboard and MCP server that links **Git Worktrees**, **Agent Sessions**, and **Pull Requests** (including stacked PR chains).
 
-This skill is agent-agnostic and works identically across any coding agent that can run shell commands or connect to Model Context Protocol (MCP) servers.
+Nothing in this skill is specific to a single agent vendor: any coding agent that can read a Markdown instruction file, run shell commands, or connect to a Model Context Protocol (MCP) server can use it.
+
+## Prerequisites
+
+`prdash` must be on `PATH`. Check with `prdash --version`; if it is missing, install the binary with `go install`:
+
+```console
+go install github.com/tenntenn/prdash@latest
+```
+
+or download a prebuilt binary for the user's OS and architecture from `https://github.com/tenntenn/prdash/releases` and place it on `PATH`.
+
+## Installing and updating this skill
+
+The `SKILL.md` file is embedded directly inside the `prdash` binary so that the installed skill always matches the `prdash` command on `PATH`.
+
+When the user asks to **install** or **update** the `prdash` skill:
+
+1. Install or upgrade the `prdash` binary:
+   ```console
+   go install github.com/tenntenn/prdash@latest
+   ```
+   (or replace the `prdash` binary on `PATH` with the latest release binary from `https://github.com/tenntenn/prdash/releases`).
+2. Write the updated skill into the directory where your agent loads skills (pass `--force` when updating an existing copy):
+   ```console
+   prdash skill --install <skills-dir> --force
+   ```
+   Common target directories for `<skills-dir>`:
+   - `.agents/skills` (project-scoped vendor-neutral skills directory)
+   - `~/.agents/skills` (user-scoped vendor-neutral skills directory)
+   - `.claude/skills` or `~/.claude/skills` (Claude Code)
+   - Any agent-specific rules/skills directory configured in the workspace
+
+To inspect the embedded skill without writing files:
+
+```console
+prdash skill          # print SKILL.md to stdout
+prdash skill --list   # list embedded skill files
+```
+
+---
 
 ## Controller Session Role
 
-When an agent session loads this skill and starts `prdash`, that agent session serves as the **Dashboard Controller Session** (`sess-controller`):
+When an agent session loads this skill and starts `prdash`, that agent session acts as the **Dashboard Controller Session** (`sess-controller`):
 
-1. **Human → Controller**: The human operator can type instructions directly into the **Dashboard Session** input panel in the web UI (or via MCP/API).
-2. **Controller → Worker Sessions**: The controller session coordinates worker sessions bound to individual git worktrees, forwarding PR-level instructions, routine actions, and `sbnn` review tasks.
+1. **Human → Controller**: The human operator can send orchestration instructions from the **Dashboard Session** panel in the browser UI.
+2. **Controller → Worker Sessions**: The controller session coordinates worker sessions bound to individual git worktrees, dispatching PR-level instructions, routine actions, and `sbnn` review tasks.
 3. **Worker Sessions → Controller & Human**: Worker sessions report progress and completion back to the dashboard. Whenever a PR transitions from `working` (**Agent Working**) to `waiting_for_human` (**Waiting for Human**), `prdash` emits a notification to alert the human operator.
 
 ## Starting the Dashboard
 
-Run `prdash` from the repository root (pass `-state` to synchronize state with MCP tool invocations):
+Start `prdash` for the target repository, passing `-state` so the Web UI and MCP / CLI invocations share state:
 
-```bash
-go run github.com/tenntenn/prdash -repo owner/name -state /tmp/prdash-state.json
+```console
+prdash -repo owner/name -state /tmp/prdash-state.json
 ```
 
 - `prdash` automatically binds an available local TCP port and prints the URL on stdout:
   ```text
   prdash listening on http://127.0.0.1:<port> (repository: owner/name)
   ```
-- Open the printed URL in a browser to view and operate the dashboard.
+- Hand the printed URL to the human operator so they can open and operate the dashboard in their browser.
 
 ## Operating via MCP Server
 
-`prdash` also runs as a standard JSON-RPC 2.0 MCP server over stdio, sharing the exact same core `prdash.Service` implementation:
+`prdash` also runs as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio, sharing the same `prdash.Service` core:
 
-```bash
-go run github.com/tenntenn/prdash -mcp -repo owner/name -state /tmp/prdash-state.json
+```console
+prdash -mcp -repo owner/name -state /tmp/prdash-state.json
 ```
 
 ### Available MCP Tools
@@ -68,6 +109,9 @@ go run github.com/tenntenn/prdash -mcp -repo owner/name -state /tmp/prdash-state
 When the web dashboard is running at `http://127.0.0.1:<port>`, any agent can inspect and control it over HTTP:
 
 - `GET /api/state` — Fetch full `Snapshot` JSON (including `controller_session.messages` to read instructions entered by the human in the UI).
+- `POST /api/worktrees` — Register or update a git worktree.
+- `POST /api/sessions` — Register or update a worker session.
+- `POST /api/prs` — Register or update a pull request.
 - `POST /api/prs/{number}/messages` — `{"author": "Controller Agent", "text": "..."}`
 - `POST /api/prs/{number}/sbnn-comment` — `{"file_path": "pkg/foo.go", "line": 42, "body": "..."}`
 - `POST /api/prs/{number}/request-review` — `{"focus": "concurrency"}`
