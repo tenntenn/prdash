@@ -11,11 +11,7 @@
   let initialLoadComplete = false;
 
   async function apiPost(path, payload) {
-    const resp = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload || {}),
-    });
+    const resp = await window.prdashHTTP.post(path, payload);
     const data = await resp.json();
     if (!resp.ok) {
       throw new Error(data.error || `Request failed: ${resp.status}`);

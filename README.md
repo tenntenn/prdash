@@ -87,6 +87,8 @@ Use `--force` to replace an installed Skill. To inspect the embedded instruction
 
 See the [CLI and integration reference](docs/integrations.md) for manual commands, flags, MCP configuration, and the Go package. The [Skill](skills/prdash/SKILL.md) contains the agent's operating procedure.
 
+See [Local HTTP access](docs/security.md) for endpoint protection and agent authentication.
+
 Development tools are managed with [aqua](https://aquaproj.github.io/). Install them with `aqua i` and use:
 
 ```console

@@ -99,6 +99,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return err
 	}
 
+	if !*mcpMode {
+		if err := prdash.ValidateHTTPListenAddress(*addr); err != nil {
+			return err
+		}
+	}
+
 	resolvedRepo, resolvedState := resolveRepoAndState(ctx, *repo, *workDir, *stateFile)
 	svc := prdash.NewService(prdash.Options{
 		Repository: resolvedRepo,
