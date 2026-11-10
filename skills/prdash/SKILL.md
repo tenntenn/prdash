@@ -52,7 +52,7 @@ prdash skill --list   # list embedded skill files
 
 ## Workflow
 
-State for each repository is automatically persisted in `$XDG_STATE_HOME/prdash/state-<owner>__<repo>.json` (or `~/.local/state/prdash/...`), so the Web UI, CLI subcommands, and MCP server share state automatically without needing manual state file flags.
+State for each repository is automatically persisted in `$XDG_STATE_HOME/prdash/state-<owner>__<repo>.json` (or `~/.local/state/prdash/...`), so sequential invocations can reuse state. For parallel execution, use one server as the state owner and connect workers through the instruction HTTP API. Independent processes writing the same file are not transactionally coordinated (#37).
 
 ### 1. Start the dashboard and synchronize the repository
 
@@ -92,29 +92,28 @@ prdash wait --session <worker-session-id> --timeout 30m
 
 ### 3. Act on instructions and report results back
 
-When a worker session finishes addressing review comments, fixing CI, or resolving conflicts on a PR, report the result back so `prdash` marks the queued instructions as handled, transitions the PR from `working` (**Agent Working**) to `waiting_for_human` (**Waiting for Human**), and alerts the human operator:
+Before executing an instruction, claim its exact ID through the single running
+server. Use a stable consumer ID unique to this worker:
 
-```console
-prdash report --pr <number> --status waiting_for_human -m "Resolved conflicts and verified test suite passes."
+```sh
+prdash instruction claim -server http://127.0.0.1:8080 -session <assigned-session> -id <instruction-id> -consumer <consumer-id>
+prdash instruction result -server http://127.0.0.1:8080 -session <assigned-session> -id <instruction-id> -consumer <consumer-id> -claim-token <returned-token> -attempt <returned-attempt> -target-commit <returned-target-commit> -outcome completed -status waiting_for_human -m "Verification completed"
 ```
 
-To queue an instruction from the CLI to a PR, worker session, or the controller session:
+Save the claim before executing. If the target commit is unknown, supply the
+concrete input commit with `-target-commit` when claiming. Delivery acknowledgment
+(`instruction ack`) is separate from execution completion. `get` returns the
+lifecycle state; after a restart, the same consumer can recover its running claim.
+Never automatically expire or steal a running claim. Inspect external effects
+before resuming and use instruction ID plus attempt as an idempotency key.
 
-```console
-prdash send --pr <number> -m "Rebase onto base branch and run tests"
-prdash send --session <session-id> -m "Run linter across package"
-prdash send --controller -m "Rebalance model tiers across open stacks"
-```
-
----
-
-## Operating via MCP Server
-
-`prdash` also runs as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio, sharing the exact same `prdash.Service` core and repository state file:
-
-```console
-prdash -mcp
-```
+Use `-outcome failed` for failure. Explicit `instruction retry` requires that
+failed claim's consumer, token and attempt; the next claim gets a fresh attempt.
+Identical result resends are safe, but execution is not exactly-once. A stale
+result is retained without applying PR status to a newer instruction/head/session.
+Legacy `report` is an uncorrelated status report and does not acknowledge queued
+instructions. Do not use bulk ack or independent state-file writers for parallel
+execution. See the integration reference's instruction lifecycle for the complete contract.
 
 ### Available MCP Tools
 
@@ -123,7 +122,11 @@ prdash -mcp
 | `get_dashboard` | Retrieve the full repository snapshot (PRs, stacks, sessions, worktrees, model presets, notifications). |
 | `sync_repository` | Discover local git worktrees (`git worktree list`) and open GitHub pull requests (`gh pr list`) and synchronize them into the dashboard. |
 | `list_pending_instructions` | List unhandled instructions queued for a worker session or the controller session (`session_id`). |
-| `ack_instructions` | Mark queued instructions for `session_id` (and optional `pr_number`) as handled. |
+| `ack_instructions` | Deprecated bulk delivery acknowledgment; use `ack_instruction` for parallel consumers. |
+| `get_instruction` / `ack_instruction` | Inspect or acknowledge delivery of one instruction ID and assigned session. |
+| `claim_instruction` | Claim one ID with a stable consumer ID; recover the same running claim after restart. |
+| `report_instruction_result` | Correlate result with instruction ID, session, consumer, token, attempt and target commit. |
+| `retry_instruction` | Explicitly requeue a failed attempt without losing result history. |
 | `list_prs` | List pull requests filtered by `status` (`waiting_for_human` or `working`) or `stack_id`. |
 | `get_pr` | Inspect a single PR and its full session conversation thread. |
 | `upsert_worktree` | Register or update a git worktree bound to an agent session. |
@@ -138,7 +141,7 @@ prdash -mcp
 | `set_pr_status` | Transition a PR between `waiting_for_human` and `working`. |
 | `send_session_instruction` | Send a direct instruction to a worker session outside any specific PR thread. |
 | `send_controller_instruction` | Send an orchestration instruction to the dashboard controller session. |
-| `report_session_result` | Report status and results from a worker session back to the dashboard and mark instructions handled. |
+| `report_session_result` | Legacy uncorrelated status report; does not acknowledge instructions. |
 | `set_model_tier` | Set the 3-tier model preset (`pine`, `bamboo`, `plum`) for a session, subagent, or PR. |
 | `configure_model_presets` | Map `pine`, `bamboo`, and `plum` presets to concrete model identifiers. |
 | `mark_notification_read` | Mark a notification ID or `"all"` notifications as read. |
