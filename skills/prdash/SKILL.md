@@ -92,6 +92,14 @@ prdash wait --session <worker-session-id> --timeout 30m
 
 ### 3. Act on instructions and report results back
 
+Before changing a PR worktree, call `validate_pr_worktree` with its `pr_number`
+(or `POST /api/prs/{number}/validate-worktree` on the dashboard). Use the returned
+absolute path only after validation succeeds. If validation fails, report the
+missing or changed execution target instead of substituting the conversation's
+working directory. Revalidate after changing the checkout. A session reassignment
+does not authorize changing the PR's worktree.
+
+
 When a worker session finishes addressing review comments, fixing CI, or resolving conflicts on a PR, report the result back so `prdash` marks the queued instructions as handled, transitions the PR from `working` (**Agent Working**) to `waiting_for_human` (**Waiting for Human**), and alerts the human operator:
 
 ```console
@@ -121,6 +129,7 @@ prdash -mcp
 | Tool | Purpose |
 | :--- | :--- |
 | `get_dashboard` | Retrieve the full repository snapshot (PRs, stacks, sessions, worktrees, model presets, notifications). |
+| `validate_pr_worktree` | Recheck the assigned Git root and HEAD before changing a PR worktree. |
 | `sync_repository` | Discover local git worktrees (`git worktree list`) and open GitHub pull requests (`gh pr list`) and synchronize them into the dashboard. |
 | `list_pending_instructions` | List unhandled instructions queued for a worker session or the controller session (`session_id`). |
 | `ack_instructions` | Mark queued instructions for `session_id` (and optional `pr_number`) as handled. |

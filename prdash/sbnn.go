@@ -14,13 +14,16 @@ import (
 
 // SBNNCommentRequest describes a pull request comment dispatched through the local sbnn review tool.
 type SBNNCommentRequest struct {
-	Repository string `json:"repository"`
-	PRNumber   int    `json:"pr_number"`
-	Branch     string `json:"branch"`
-	Worktree   string `json:"worktree"`
-	FilePath   string `json:"file_path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	Body       string `json:"body"`
+	WorktreePath string `json:"worktree_path,omitempty"`
+	HeadSHA      string `json:"head_sha,omitempty"`
+	BaseBranch   string `json:"base_branch,omitempty"`
+	Repository   string `json:"repository"`
+	PRNumber     int    `json:"pr_number"`
+	Branch       string `json:"branch"`
+	Worktree     string `json:"worktree"`
+	FilePath     string `json:"file_path,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	Body         string `json:"body"`
 }
 
 // SBNNCommentResult contains the formatted comment record produced by sbnn.
@@ -33,12 +36,14 @@ type SBNNCommentResult struct {
 
 // SBNNReviewRequest describes an automated review request sent to sbnn.
 type SBNNReviewRequest struct {
-	Repository string `json:"repository"`
-	PRNumber   int    `json:"pr_number"`
-	Branch     string `json:"branch"`
-	BaseBranch string `json:"base_branch"`
-	Worktree   string `json:"worktree"`
-	Focus      string `json:"focus,omitempty"`
+	WorktreePath string `json:"worktree_path,omitempty"`
+	HeadSHA      string `json:"head_sha,omitempty"`
+	Repository   string `json:"repository"`
+	PRNumber     int    `json:"pr_number"`
+	Branch       string `json:"branch"`
+	BaseBranch   string `json:"base_branch"`
+	Worktree     string `json:"worktree"`
+	Focus        string `json:"focus,omitempty"`
 }
 
 // SBNNReviewResult contains the structured findings returned by sbnn.
@@ -80,7 +85,11 @@ func (c *CLISBNNClient) SubmitComment(ctx context.Context, req SBNNCommentReques
 	}
 
 	target := fmt.Sprintf("pr-%d", req.PRNumber)
-	diffText := c.ensurePRDiffSent(ctx, req.Repository, req.PRNumber, "main", req.Branch, target)
+	workDir, workErr := c.reviewWorkDir(ctx, req.WorktreePath)
+	if workErr != nil {
+		return SBNNCommentResult{}, workErr
+	}
+	diffText := c.ensurePRDiffSent(ctx, req.Repository, req.PRNumber, req.BaseBranch, req.Branch, target, workDir)
 
 	filePath := strings.TrimSpace(req.FilePath)
 	if filePath == "" {
@@ -99,8 +108,8 @@ func (c *CLISBNNClient) SubmitComment(ctx context.Context, req SBNNCommentReques
 	cmdLine := c.Bin + " " + strings.Join(args, " ")
 
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
-	if c.Dir != "" {
-		cmd.Dir = c.Dir
+	if workDir != "" {
+		cmd.Dir = workDir
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return SBNNCommentResult{}, fmt.Errorf("%s: %w (%s)", cmdLine, err, strings.TrimSpace(string(out)))
@@ -115,22 +124,22 @@ func (c *CLISBNNClient) SubmitComment(ctx context.Context, req SBNNCommentReques
 	}, nil
 }
 
-func (c *CLISBNNClient) ensurePRDiffSent(ctx context.Context, repo string, prNumber int, base, head, target string) string {
+func (c *CLISBNNClient) ensurePRDiffSent(ctx context.Context, repo string, prNumber int, base, head, target, workDir string) string {
 	if strings.TrimSpace(base) == "" {
 		base = "main"
 	}
 	if strings.TrimSpace(head) == "" {
 		head = "HEAD"
 	}
-	diffOut, diffErr := runGit(ctx, c.Dir, "diff", base+"..."+head)
+	diffOut, diffErr := runGit(ctx, workDir, "diff", base+"..."+head)
 	if (diffErr != nil || diffOut == "") && prNumber > 0 {
 		ghArgs := []string{"pr", "diff", strconv.Itoa(prNumber)}
 		if strings.TrimSpace(repo) != "" && strings.Contains(repo, "/") {
 			ghArgs = append(ghArgs, "--repo", strings.TrimSpace(repo))
 		}
 		ghCmd := exec.CommandContext(ctx, "gh", ghArgs...)
-		if c.Dir != "" {
-			ghCmd.Dir = c.Dir
+		if workDir != "" {
+			ghCmd.Dir = workDir
 		}
 		if out, err := ghCmd.Output(); err == nil {
 			diffOut = string(out)
@@ -145,8 +154,8 @@ func (c *CLISBNNClient) ensurePRDiffSent(ctx context.Context, repo string, prNum
 			"--json",
 		}
 		sendCmd := exec.CommandContext(ctx, c.Bin, sendArgs...)
-		if c.Dir != "" {
-			sendCmd.Dir = c.Dir
+		if workDir != "" {
+			sendCmd.Dir = workDir
 		}
 		sendCmd.Stdin = strings.NewReader(diffOut)
 		_ = sendCmd.Run()
@@ -179,13 +188,17 @@ type sbnnCommentEntry struct {
 // RunReview sends the pull request diff to `sbnn` and reads open comments from `sbnn comments --format json`.
 func (c *CLISBNNClient) RunReview(ctx context.Context, req SBNNReviewRequest) (SBNNReviewResult, error) {
 	target := fmt.Sprintf("pr-%d", req.PRNumber)
-	_ = c.ensurePRDiffSent(ctx, req.Repository, req.PRNumber, req.BaseBranch, req.Branch, target)
+	workDir, workErr := c.reviewWorkDir(ctx, req.WorktreePath)
+	if workErr != nil {
+		return SBNNReviewResult{}, workErr
+	}
+	_ = c.ensurePRDiffSent(ctx, req.Repository, req.PRNumber, req.BaseBranch, req.Branch, target, workDir)
 
 	commentsArgs := []string{"comments", "--target", target, "--format", "json"}
 	cmdLine := c.Bin + " " + strings.Join(commentsArgs, " ")
 	cmd := exec.CommandContext(ctx, c.Bin, commentsArgs...)
-	if c.Dir != "" {
-		cmd.Dir = c.Dir
+	if workDir != "" {
+		cmd.Dir = workDir
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -274,4 +287,15 @@ func (s *StubSBNNClient) RunReview(_ context.Context, req SBNNReviewRequest) (SB
 		Findings:    findings,
 		CreatedAt:   time.Now().UTC(),
 	}, nil
+}
+
+func (c *CLISBNNClient) reviewWorkDir(ctx context.Context, path string) (string, error) {
+	if path == "" {
+		return c.Dir, nil
+	}
+	wt := InspectWorktree(ctx, Worktree{Path: path})
+	if wt.Status != "clean" && wt.Status != "dirty" {
+		return "", fmt.Errorf("%w: %s: %s", ErrReviewWorktreeUnavailable, path, wt.StatusError)
+	}
+	return path, nil
 }

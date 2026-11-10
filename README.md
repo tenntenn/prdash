@@ -181,6 +181,27 @@ func main() {
   - **Review & Turn Handoff**: **Request Review (sbnn)**, **Address Review**, inline/PR comment submission via `sbnn` ([`prdash/sbnn.go`](prdash/sbnn.go)), and manual status handoff.
 - **Dashboard Session & Notifications Sidebar**: Send orchestration instructions to the controller session running the dashboard, inspect inter-session logs, and receive real-time in-app and Web Notification API alerts when PRs transition to **Waiting for Human**.
 
+## Worktree validation
+
+Worktrees retain full commit IDs and expose inspection states: `unknown`, `clean`,
+`dirty`, `missing`, `prunable`, and `error`. Failed inspection never establishes
+cleanliness; `status_error` contains the reason. Detached worktrees are marked
+with `detached` and can be matched to a PR by its full `head_sha`.
+
+An explicit PR worktree ID takes precedence over branch matching. Ambiguous,
+unavailable, and commit-mismatched candidates are not assigned automatically.
+Repository sync preserves existing PR session and worktree bindings; updating a
+session without a worktree ID does not change the PR's execution directory.
+
+Before applying queued changes, call the MCP tool `validate_pr_worktree` with
+`pr_number`, or `POST /api/prs/{number}/validate-worktree`. Validation rechecks the
+actual Git root and HEAD, including manually registered worktrees, and rejects
+missing directories, nested directories, changed commits, and changed bindings.
+The HTTP API returns 409 for an unavailable target. A successful result is a
+point-in-time check, so consumers should execute immediately and revalidate after
+switching or updating the checkout. Read-only sbnn operations validate the selected
+Git root but may inspect a commit other than the checkout's current HEAD.
+
 ## Development
 
 Tools are managed with [aqua](https://aquaproj.github.io/); run `aqua i` to install `go`, `task`, and `goimports`.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,13 +13,14 @@ import (
 )
 
 var (
-	ErrPRNotFound           = errors.New("pull request not found")
-	ErrSessionNotFound      = errors.New("session not found")
-	ErrNotificationNotFound = errors.New("notification not found")
-	ErrInvalidModelTier     = errors.New("invalid model tier preset (must be pine, bamboo, or plum)")
-	ErrInvalidPRStatus      = errors.New("invalid pull request status")
-	ErrInvalidRoutineAction = errors.New("invalid routine action")
-	ErrEmptyMessage         = errors.New("message text must not be empty")
+	ErrReviewWorktreeUnavailable = errors.New("review worktree unavailable")
+	ErrPRNotFound                = errors.New("pull request not found")
+	ErrSessionNotFound           = errors.New("session not found")
+	ErrNotificationNotFound      = errors.New("notification not found")
+	ErrInvalidModelTier          = errors.New("invalid model tier preset (must be pine, bamboo, or plum)")
+	ErrInvalidPRStatus           = errors.New("invalid pull request status")
+	ErrInvalidRoutineAction      = errors.New("invalid routine action")
+	ErrEmptyMessage              = errors.New("message text must not be empty")
 )
 
 // Options configures a new Service instance.
@@ -199,14 +201,8 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 	}
 
 	if prErr == nil {
-		wtByBranch := make(map[string]Worktree, len(s.worktrees))
-		for _, wt := range s.worktrees {
-			if wt.Branch != "" {
-				wtByBranch[wt.Branch] = wt
-			}
-		}
 		for _, pr := range prs {
-			if wt, ok := wtByBranch[pr.Branch]; ok {
+			if wt, selectErr := selectReviewWorktree(&pr, s.worktrees); selectErr == nil && wt != nil {
 				pr.WorktreeID = wt.ID
 				if pr.SessionID == "" {
 					pr.SessionID = wt.SessionID
@@ -219,10 +215,10 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 				pr.ModelTier = existing.ModelTier
 				pr.ResolvedModel = s.modelConfig.Resolve(existing.ModelTier)
 				pr.Thread = existing.Thread
-				if pr.WorktreeID == "" {
+				if existing.WorktreeID != "" {
 					pr.WorktreeID = existing.WorktreeID
 				}
-				if pr.SessionID == "" {
+				if existing.SessionID != "" {
 					pr.SessionID = existing.SessionID
 				}
 				s.prs[idx] = pr
@@ -662,6 +658,62 @@ func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest,
 	return res, nil
 }
 
+func (s *Service) resolveWorktreePathAndSHALocked(pr *PullRequest) (string, string, error) {
+	selected, err := selectReviewWorktree(pr, s.worktrees)
+	if err != nil {
+		return "", "", err
+	}
+	if selected == nil {
+		return "", pr.HeadSHA, nil
+	}
+	headSHA := pr.HeadSHA
+	if headSHA == "" {
+		headSHA = selected.HeadSHA
+	}
+	return selected.Path, headSHA, nil
+}
+
+func selectReviewWorktree(pr *PullRequest, worktrees []Worktree) (*Worktree, error) {
+	var selected *Worktree
+	for i := range worktrees {
+		wt := &worktrees[i]
+		if pr.WorktreeID != "" {
+			if wt.ID == pr.WorktreeID {
+				selected = wt
+				break
+			}
+			continue
+		}
+		matches := wt.Branch != "" && wt.Branch == pr.Branch
+		if wt.Detached {
+			matches = pr.HeadSHA != "" && wt.HeadSHA == pr.HeadSHA
+		}
+		if !matches {
+			continue
+		}
+		if selected != nil {
+			return nil, fmt.Errorf("%w: target %q matches multiple worktrees; assign a worktree explicitly", ErrReviewWorktreeUnavailable, pr.Branch)
+		}
+		selected = wt
+	}
+	if selected == nil {
+		if pr.WorktreeID != "" {
+			return nil, fmt.Errorf("%w: %q is not registered", ErrReviewWorktreeUnavailable, pr.WorktreeID)
+		}
+		return nil, nil
+	}
+	if selected.Prunable || (selected.Status != "" && selected.Status != "clean" && selected.Status != "dirty") {
+		return nil, fmt.Errorf("%w: %q has status %q: %s", ErrReviewWorktreeUnavailable, selected.ID, selected.Status, selected.StatusError)
+	}
+	if !filepath.IsAbs(selected.Path) {
+		return nil, fmt.Errorf("%w: %q requires an absolute path", ErrReviewWorktreeUnavailable, selected.ID)
+	}
+	if pr.HeadSHA != "" && selected.HeadSHA != "" && pr.HeadSHA != selected.HeadSHA {
+		return nil, fmt.Errorf("%w: %q is at %s, PR requires %s", ErrReviewWorktreeUnavailable, selected.ID, selected.HeadSHA, pr.HeadSHA)
+	}
+	return selected, nil
+}
+
 // PostSBNNComment submits a review comment through the sbnn integration boundary,
 // appends it to the PR thread, and queues a review-fix instruction if Auto-Mode is enabled.
 func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath string, line int, body string) (PullRequest, error) {
@@ -676,15 +728,22 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 	}
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
+	wtPath, headSHA, worktreeErr := s.resolveWorktreePathAndSHALocked(&prCopy)
 	s.mu.RUnlock()
+	if worktreeErr != nil {
+		return PullRequest{}, worktreeErr
+	}
 	req := SBNNCommentRequest{
-		Repository: repoFullName,
-		PRNumber:   prCopy.Number,
-		Branch:     prCopy.Branch,
-		Worktree:   prCopy.WorktreeID,
-		FilePath:   strings.TrimSpace(filePath),
-		Line:       line,
-		Body:       body,
+		BaseBranch:   prCopy.BaseBranch,
+		WorktreePath: wtPath,
+		HeadSHA:      headSHA,
+		Repository:   repoFullName,
+		PRNumber:     prCopy.Number,
+		Branch:       prCopy.Branch,
+		Worktree:     prCopy.WorktreeID,
+		FilePath:     strings.TrimSpace(filePath),
+		Line:         line,
+		Body:         body,
 	}
 
 	result, err := s.reviewer.SubmitComment(ctx, req)
@@ -740,14 +799,20 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 	}
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
+	wtPath, headSHA, worktreeErr := s.resolveWorktreePathAndSHALocked(&prCopy)
 	s.mu.RUnlock()
+	if worktreeErr != nil {
+		return PullRequest{}, worktreeErr
+	}
 	req := SBNNReviewRequest{
-		Repository: repoFullName,
-		PRNumber:   prCopy.Number,
-		Branch:     prCopy.Branch,
-		BaseBranch: prCopy.BaseBranch,
-		Worktree:   prCopy.WorktreeID,
-		Focus:      strings.TrimSpace(focus),
+		WorktreePath: wtPath,
+		HeadSHA:      headSHA,
+		Repository:   repoFullName,
+		PRNumber:     prCopy.Number,
+		Branch:       prCopy.Branch,
+		BaseBranch:   prCopy.BaseBranch,
+		Worktree:     prCopy.WorktreeID,
+		Focus:        strings.TrimSpace(focus),
 	}
 
 	reviewRes, err := s.reviewer.RunReview(ctx, req)
@@ -1462,6 +1527,12 @@ func (s *Service) UpsertPR(in PullRequest) (PullRequest, error) {
 	existing, idx := s.findPRLocked(in.Number)
 	var prevStatus PRStatus
 	if existing != nil && idx >= 0 {
+		if in.WorktreeID == "" {
+			in.WorktreeID = existing.WorktreeID
+		}
+		if in.SessionID == "" {
+			in.SessionID = existing.SessionID
+		}
 		prevStatus = existing.Status
 		if len(in.Thread) == 0 {
 			in.Thread = existing.Thread

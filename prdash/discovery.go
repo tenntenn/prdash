@@ -91,9 +91,7 @@ func DiscoverWorktrees(ctx context.Context, dir string) ([]Worktree, error) {
 	}
 	worktrees := ParseGitWorktreePorcelain(out)
 	for i := range worktrees {
-		if statusOut, statusErr := runGit(ctx, worktrees[i].Path, "status", "--porcelain"); statusErr == nil {
-			worktrees[i].Clean = strings.TrimSpace(statusOut) == ""
-		}
+		worktrees[i] = InspectWorktree(ctx, worktrees[i])
 	}
 	return worktrees, nil
 }
@@ -110,10 +108,12 @@ func ParseGitWorktreePorcelain(porcelain string) []Worktree {
 			continue
 		}
 		var (
-			wtPath string
-			head   string
-			branch string
-			bare   bool
+			wtPath   string
+			head     string
+			branch   string
+			bare     bool
+			prunable bool
+			detached bool
 		)
 		for line := range strings.SplitSeq(block, "\n") {
 			line = strings.TrimSpace(line)
@@ -122,16 +122,16 @@ func ParseGitWorktreePorcelain(porcelain string) []Worktree {
 				wtPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
 			case strings.HasPrefix(line, "HEAD "):
 				head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
-				if len(head) > 7 {
-					head = head[:7]
-				}
 			case strings.HasPrefix(line, "branch "):
 				ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
 				branch = strings.TrimPrefix(ref, "refs/heads/")
 			case line == "detached":
+				detached = true
 				if branch == "" {
 					branch = "HEAD"
 				}
+			case line == "prunable" || strings.HasPrefix(line, "prunable "):
+				prunable = true
 			case line == "bare":
 				bare = true
 			}
@@ -148,18 +148,26 @@ func ParseGitWorktreePorcelain(porcelain string) []Worktree {
 		if usedIDs[baseID] > 1 {
 			id = fmt.Sprintf("%s-%d", baseID, usedIDs[baseID])
 		}
+		status := "unknown"
+		if prunable {
+			status = "prunable"
+		}
 		worktrees = append(worktrees, Worktree{
-			ID:      id,
-			Path:    wtPath,
-			Branch:  branch,
-			HeadSHA: head,
-			Clean:   true,
+			Status:   status,
+			Prunable: prunable,
+			Detached: detached,
+			ID:       id,
+			Path:     wtPath,
+			Branch:   branch,
+			HeadSHA:  head,
+			Clean:    false,
 		})
 	}
 	return worktrees
 }
 
 type ghPRItem struct {
+	HeadRefOid        string           `json:"headRefOid"`
 	Number            int              `json:"number"`
 	Title             string           `json:"title"`
 	Body              string           `json:"body"`
@@ -186,7 +194,7 @@ func DiscoverPullRequests(ctx context.Context, repoFullName, dir string, default
 		"pr", "list",
 		"--state", "open",
 		"--limit", "100",
-		"--json", "number,title,body,headRefName,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
+		"--json", "number,title,body,headRefName,headRefOid,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
 	}
 	if strings.Contains(repoFullName, "/") {
 		args = append(args, "--repo", repoFullName)
@@ -213,22 +221,20 @@ func ParseGitHubPRListJSON(data []byte, defaultBranch string, worktrees []Worktr
 		return nil, fmt.Errorf("parse gh pr list json: %w", err)
 	}
 
-	wtByBranch := make(map[string]Worktree, len(worktrees))
-	for _, wt := range worktrees {
-		if wt.Branch != "" {
-			wtByBranch[wt.Branch] = wt
-		}
-	}
-
 	prs := make([]PullRequest, 0, len(items))
 	byHead := make(map[string]int, len(items))
 	for _, item := range items {
-		wt := wtByBranch[item.HeadRefName]
+		var wt Worktree
+		candidate := PullRequest{Branch: item.HeadRefName, HeadSHA: strings.TrimSpace(item.HeadRefOid)}
+		if selected, selectErr := selectReviewWorktree(&candidate, worktrees); selectErr == nil && selected != nil {
+			wt = *selected
+		}
 		updated := item.UpdatedAt
 		if updated.IsZero() {
 			updated = time.Now().UTC()
 		}
 		pr := PullRequest{
+			HeadSHA:       strings.TrimSpace(item.HeadRefOid),
 			ID:            fmt.Sprintf("pr-%d", item.Number),
 			Number:        item.Number,
 			Title:         item.Title,

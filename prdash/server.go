@@ -165,6 +165,20 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, pr)
 	})
 
+	mux.HandleFunc("POST /api/prs/{number}/validate-worktree", func(w http.ResponseWriter, r *http.Request) {
+		num, err := parsePRNumber(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		wt, validationErr := svc.ValidatePRWorktree(r.Context(), num)
+		if validationErr != nil {
+			writeServiceError(w, validationErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, wt)
+	})
+
 	mux.HandleFunc("POST /api/prs/{number}/request-review", func(w http.ResponseWriter, r *http.Request) {
 		num, parseErr := parsePRNumber(r)
 		if parseErr != nil {
@@ -459,6 +473,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
 		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, ErrReviewWorktreeUnavailable):
+		writeError(w, http.StatusConflict, err)
 	default:
 		writeError(w, http.StatusInternalServerError, err)
 	}

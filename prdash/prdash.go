@@ -114,12 +114,16 @@ type RepositoryInfo struct {
 
 // Worktree represents a git worktree bound to an agent session.
 type Worktree struct {
-	ID        string `json:"id"`
-	Path      string `json:"path"`
-	Branch    string `json:"branch"`
-	HeadSHA   string `json:"head_sha"`
-	Clean     bool   `json:"clean"`
-	SessionID string `json:"session_id"`
+	Status      string `json:"status,omitempty"`
+	StatusError string `json:"status_error,omitempty"`
+	Prunable    bool   `json:"prunable,omitempty"`
+	Detached    bool   `json:"detached,omitempty"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	HeadSHA     string `json:"head_sha"`
+	Clean       bool   `json:"clean"`
+	SessionID   string `json:"session_id"`
 }
 
 // SessionMessage represents an instruction or report exchanged with an agent session.
@@ -166,6 +170,7 @@ type ThreadMessage struct {
 
 // PullRequest represents a pull request created and maintained by an agent session.
 type PullRequest struct {
+	HeadSHA        string          `json:"head_sha,omitempty"`
 	ID             string          `json:"id"`
 	Number         int             `json:"number"`
 	Title          string          `json:"title"`

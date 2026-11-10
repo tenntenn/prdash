@@ -165,10 +165,11 @@ func TestDiscoveryParsersAndStackInference(t *testing.T) {
 	if len(wts) != 2 {
 		t.Fatalf("expected 2 worktrees, got %d", len(wts))
 	}
-	if wts[1].Branch != "feat/auth-step1" || wts[1].HeadSHA != "9876543" {
+	if wts[1].Branch != "feat/auth-step1" || wts[1].HeadSHA != "9876543210ab" {
 		t.Fatalf("unexpected parsed worktree: %+v", wts[1])
 	}
 	wts[1].SessionID = "sess-auth"
+	wts[1].Status = "clean"
 
 	ghJSON := `[
 		{"number":202,"title":"sample-stack-2","body":"step 2","headRefName":"feat/auth-step2","baseRefName":"feat/auth-step1","additions":40,"deletions":5,"changedFiles":2,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","statusCheckRollup":[{"state":"SUCCESS"}]},
