@@ -208,3 +208,23 @@ test("an accepted submission is cleared even when the following state refresh fa
   await f.page.getByText("Your change was accepted. The dashboard will reconnect.", { exact: true }).waitFor();
   assert.equal(f.requests.length, 1);
 });
+
+test("partial sync exposes errors and refreshed lifecycle without losing drafts", async (t) => {
+  const fixture = await setup(t);
+  const { page, snap } = fixture;
+  await fillForm(page, forms[0]);
+  fixture.mode = "server-error";
+  snap.sync = { git_error: "Sample Git unavailable", github_error: "" };
+  snap.pull_requests[0].github_state = "open";
+  snap.pull_requests[0].is_draft = true;
+  snap.pull_requests[0].mergeability = "unknown";
+  snap.pull_requests[0].ci_status = "unknown";
+  await page.locator("#sync-repo-btn").click();
+  await page.waitForFunction(() => document.querySelector("#repository-sync-status")?.textContent.includes("Sample Git unavailable"));
+  assert.match(await page.locator("#toast-container").textContent(), /Repository sync incomplete/);
+  const card = await page.locator('[data-pr-card="101"]').textContent();
+  assert.match(card, /GitHub: open · Draft/);
+  assert.match(card, /Mergeability: unknown/);
+  assert.match(card, /CI: unknown/);
+  await assertValues(page, forms[0]);
+});
