@@ -105,7 +105,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 	}
 
-	resolvedRepo, resolvedState := resolveRepoAndState(ctx, *repo, *workDir, *stateFile)
+	resolvedRepo, resolvedState, err := resolveRepoAndState(ctx, *repo, *workDir, *stateFile)
+	if err != nil {
+		return err
+	}
 	svc := prdash.NewService(prdash.Options{
 		Repository: resolvedRepo,
 		WorkDir:    *workDir,
@@ -116,6 +119,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Plum:   *plumModel,
 		},
 	})
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -172,7 +178,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 }
 
-func resolveRepoAndState(ctx context.Context, repoFlag, dirFlag, stateFlag string) (string, string) {
+func resolveRepoAndState(ctx context.Context, repoFlag, dirFlag, stateFlag string) (string, string, error) {
 	repoName := strings.TrimSpace(repoFlag)
 	if repoName == "" {
 		detected := prdash.DetectRepositoryInfo(ctx, dirFlag)
@@ -181,24 +187,25 @@ func resolveRepoAndState(ctx context.Context, repoFlag, dirFlag, stateFlag strin
 	sf := strings.TrimSpace(stateFlag)
 	switch strings.ToLower(sf) {
 	case "off", "none", "no":
-		return repoName, ""
+		return repoName, "", nil
 	case "":
-		if defPath, err := prdash.DefaultStateFile(repoName); err == nil {
-			return repoName, defPath
-		}
-		return repoName, ""
+		defPath, err := prdash.DefaultStateFile(repoName)
+		return repoName, defPath, err
 	default:
-		return repoName, sf
+		return repoName, sf, nil
 	}
 }
 
-func openCLIService(ctx context.Context, repoFlag, dirFlag, stateFlag string) *prdash.Service {
-	resolvedRepo, resolvedState := resolveRepoAndState(ctx, repoFlag, dirFlag, stateFlag)
+func openCLIService(ctx context.Context, repoFlag, dirFlag, stateFlag string) (*prdash.Service, error) {
+	resolvedRepo, resolvedState, err := resolveRepoAndState(ctx, repoFlag, dirFlag, stateFlag)
+	if err != nil {
+		return nil, err
+	}
 	return prdash.NewService(prdash.Options{
 		Repository: resolvedRepo,
 		WorkDir:    dirFlag,
 		StateFile:  resolvedState,
-	})
+	}), nil
 }
 
 func runStatusCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -216,15 +223,24 @@ func runStatusCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		return err
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
 	snap := svc.Snapshot()
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if *asJSON {
 		return writePrettyJSON(stdout, snap)
 	}
-	_, err := fmt.Fprintf(
+	_, err = fmt.Fprintf(
 		stdout,
 		"repository: %s (default: %s)\nworktrees: %d | sessions: %d | pull requests: %d (waiting_for_human: %d, working: %d, stacks: %d)\n",
 		snap.Repository.FullName,
@@ -254,7 +270,13 @@ func runSyncCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		}
 		return err
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -294,11 +316,20 @@ func runInstructionsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		}
 		return err
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
 	pending := svc.PendingInstructions(*sessionID)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if *ack && len(pending) > 0 {
 		for _, msg := range pending {
 			if *prNum != 0 && msg.PRNumber != *prNum {
@@ -340,7 +371,13 @@ func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		}
 		return err
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -357,6 +394,9 @@ func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 
 	for {
 		pending := svc.PendingInstructions(*sessionID)
+		if err := svc.StateError(); err != nil {
+			return err
+		}
 		if len(pending) > 0 {
 			if *ack {
 				for _, msg := range pending {
@@ -410,7 +450,13 @@ func runReportCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if *prNum <= 0 {
 		return errors.New("--pr is required")
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -451,7 +497,13 @@ func runSendCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		}
 		return err
 	}
-	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	svc, err := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err != nil {
+		return err
+	}
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}

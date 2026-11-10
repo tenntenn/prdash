@@ -15,7 +15,7 @@ $ prdash report --pr 42 -m "Fixed CI"  # legacy status report; does not acknowle
 $ prdash send --pr 42 -m "Run tests"   # queue an instruction for a PR session
 ```
 
-Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so sequential invocations can reuse state without manual `-state` flags. Parallel consumers must use one running server via `prdash instruction -server`; independent processes writing the same file are not transactionally coordinated.
+Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so the dashboard, CLI and MCP can share the selected file. Updates use a cross-process file lock and reload the current revision before mutation. `prdash instruction -server` remains a convenient way for workers to use a running server.
 
 On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header, `prdash sync` is run, or `sync_repository` is called via MCP), `prdash` automatically:
 1. Detects the repository (`owner/name`, default branch, local root) via `git`.
@@ -49,7 +49,7 @@ The same core logic can be exposed as a JSON-RPC 2.0 Model Context Protocol (MCP
 }
 ```
 
-Use a single Service owner for instruction execution. A standalone MCP process can own state, but running it alongside a web server writing the same file does not provide atomic cross-process claims. Use HTTP instruction clients against the web server for parallel workers (shared-file transactions are tracked separately in #37).
+The web and MCP processes may share the same canonical `-state` path. State mutations and instruction claims are serialized across processes using that file's sidecar lock. All writers must use this version of prdash and the same state file.
 
 ### CLI Subcommands and Flags
 
@@ -99,8 +99,8 @@ func main() {
 
 ### Claim and report an individual instruction
 
-Run one dashboard server as the state owner. Every parallel worker must use that
-same server; do not launch an independent `-mcp`/state-file writer per consumer.
+Connect HTTP workers to the running dashboard server. MCP/Go clients may also
+share its persistent state file; claims are serialized across these processes.
 Read queued IDs with `GET /api/sessions/<session>/instructions`, then:
 
 ```sh
@@ -142,3 +142,34 @@ HTTP endpoints use `/api/sessions/{id}/instructions/{instruction}` with `GET` fo
 inspection and `POST` suffixes `/ack`, `/claim`, `/result`, `/retry`. MCP exposes
 `get_instruction`, `ack_instruction`, `claim_instruction`,
 `report_instruction_result`, and `retry_instruction` on its owning Service.
+
+### Shared state transactions and errors
+
+Each mutation acquires a lock at `<canonical-state-path>.lock`, reloads the latest
+revision, applies the update, and commits a private temporary file with an atomic
+rename. Readers never see partially written JSON. External GitHub/sbnn work runs
+before this short state transaction. Different state paths have independent locks;
+symlink aliases are resolved to the same path. Leave the sidecar file in place:
+the OS releases its lock when a process exits. Lock waits fail after 10 seconds.
+Use a local filesystem with working OS file-lock and rename semantics.
+
+Revision rollback and same-revision content changes are rejected. The lock
+coordinates current prdash writers; arbitrary file editors and older versions do
+not participate. Do not edit the state file while services are running. Upsert
+operations still replace explicitly supplied fields; locking does not turn them
+into merge patches.
+
+The snapshot exposes `state_path` and `state_error`. Go callers can inspect
+`StatePath()` and must check `StateError()` after `NewService`. Mutations return
+load, lock, serialization, write and rename errors and roll back their in-memory
+changes on save failure. CLI commands exit with an error; HTTP/MCP mutations also
+report the error. Corrupt files are preserved rather than silently replaced with
+empty state. Correct the file or restore a backup before retrying. The deprecated
+`AckInstructions` API returns zero on failure; use `AckInstructionsChecked` or
+exact-ID acknowledgment when an error result is required.
+
+A failed request is not proof that an external action did not run. Inspect the
+instruction and external system before retrying side effects; a result commit may
+also have completed before an unlock/connection error was observed. Files are
+synced before rename, but the state file is not a distributed transaction with
+GitHub or the worker's commands.

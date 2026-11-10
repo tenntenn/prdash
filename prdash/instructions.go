@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 )
@@ -72,6 +71,9 @@ func (s *Service) GetInstruction(sessionID, instructionID string) (SessionMessag
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reloadStateFileIfChangedLocked()
+	if s.stateErr != nil {
+		return SessionMessage{}, s.stateErr
+	}
 	return s.instructionLocked(sessionID, instructionID)
 }
 
@@ -87,8 +89,8 @@ func (s *Service) AckInstruction(sessionID, instructionID string) (SessionMessag
 	})
 }
 
-// ClaimInstruction atomically claims one instruction within this Service owner.
-// All consumers must use the same running owner, not separate state-file writers.
+// ClaimInstruction atomically claims one instruction across Service instances
+// sharing a persistent state file, or within this Service for in-memory state.
 func (s *Service) ClaimInstruction(req InstructionClaimRequest) (InstructionClaim, error) {
 	req.ConsumerID = strings.TrimSpace(req.ConsumerID)
 	if req.ConsumerID == "" {
@@ -287,36 +289,22 @@ func (s *Service) storeInstructionLocked(msg SessionMessage) {
 // mutateInstruction keeps lifecycle transitions and result history atomic under
 // the owner lock. A failed save rolls back memory and returns no claim token.
 func (s *Service) mutateInstruction(sessionID, id string, change func(*SessionMessage) error) (SessionMessage, error) {
-	s.mu.Lock()
-	s.reloadStateFileIfChangedLocked()
+	if err := s.beginStateMutation(); err != nil {
+		return SessionMessage{}, fmt.Errorf("%w: %w", ErrInstructionPersistence, err)
+	}
 	msg, err := s.instructionLocked(sessionID, id)
-	if err != nil {
-		s.mu.Unlock()
-		return SessionMessage{}, err
-	}
-	before := s.snapshotLocked()
-	claims := maps.Clone(s.instructionClaims)
-	wasDirty := s.dirty
-	err = change(&msg)
 	if err == nil {
-		s.storeInstructionLocked(msg)
-		if saveErr := s.saveStateFileLocked(); saveErr != nil {
-			err = fmt.Errorf("%w: %w", ErrInstructionPersistence, saveErr)
-		}
+		err = change(&msg)
 	}
 	if err != nil {
-		s.controller = before.ControllerSession
-		s.sessions = before.Sessions
-		s.prs = before.PullRequests
-		s.notifications = before.Notifications
-		s.instructionClaims = claims
-		s.dirty = wasDirty
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return SessionMessage{}, err
 	}
-	s.dirty = false
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	s.storeInstructionLocked(msg)
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return SessionMessage{}, fmt.Errorf("%w: %w", ErrInstructionPersistence, err)
+	}
 	s.broadcast(snap)
 	return msg, nil
 }

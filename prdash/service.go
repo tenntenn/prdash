@@ -33,6 +33,10 @@ type Options struct {
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
+	stateErr    error
+	stateHash   [32]byte
+	transaction *stateTransaction
+
 	instructionClaims map[string]string
 	config            EffectiveConfig
 	configErr         error
@@ -52,8 +56,9 @@ type Service struct {
 	prs           []PullRequest
 	notifications []Notification
 
-	subMu       sync.Mutex
-	subscribers map[int64]chan Snapshot
+	subscriberSeq atomic.Int64
+	subMu         sync.Mutex
+	subscribers   map[int64]chan Snapshot
 }
 
 // NewService creates a Service for the target repository.
@@ -115,10 +120,9 @@ func NewService(opts Options) *Service {
 	}
 	svc.seq.Store(1000)
 	if svc.stateFile != "" {
-		if !svc.reloadStateFileIfChangedLocked() {
-			svc.saveStateFileLocked()
-		}
+		svc.initializeStateFile()
 	}
+
 	return svc
 }
 
@@ -147,7 +151,9 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 	worktrees, wtErr := DiscoverWorktrees(ctx, detectedRepo.LocalPath)
 	prs, prErr := DiscoverPullRequests(ctx, detectedRepo.FullName, detectedRepo.LocalPath, detectedRepo.DefaultBranch, worktrees, models)
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Snapshot{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	if detectedRepo.FullName != "" {
@@ -249,8 +255,10 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 	}
 
 	s.controller.ActiveTask = fmt.Sprintf("Monitoring %d pull request(s) across %d worktree(s) in %s", len(s.prs), len(s.worktrees), s.repo.FullName)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Snapshot{}, err
+	}
 
 	s.broadcast(snap)
 	if wtErr != nil && prErr != nil {
@@ -266,7 +274,7 @@ func (s *Service) nextID(prefix string) string {
 
 // Subscribe registers a listener channel that receives updated snapshots whenever state changes.
 func (s *Service) Subscribe() (<-chan Snapshot, func()) {
-	id := s.seq.Add(1)
+	id := s.subscriberSeq.Add(1)
 	ch := make(chan Snapshot, 8)
 
 	s.subMu.Lock()
@@ -309,10 +317,6 @@ func (s *Service) Snapshot() Snapshot {
 }
 
 func (s *Service) snapshotLocked() Snapshot {
-	if s.dirty {
-		s.saveStateFileLocked()
-		s.dirty = false
-	}
 	controller := cloneSession(s.controller)
 	worktrees := slices.Clone(s.worktrees)
 	if worktrees == nil {
@@ -360,6 +364,8 @@ func (s *Service) snapshotLocked() Snapshot {
 	}
 
 	return Snapshot{
+		StatePath:   s.stateFile,
+		StateError:  s.stateErrorStringLocked(),
 		Config:      cloneEffectiveConfig(s.config),
 		ConfigError: s.configErrorStringLocked(), Repository: s.repo,
 		ModelConfig:       s.modelConfig,
@@ -522,6 +528,9 @@ func (s *Service) GetPR(number int) (PullRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reloadStateFileIfChangedLocked()
+	if s.stateErr != nil {
+		return PullRequest{}, s.stateErr
+	}
 	for i := range s.prs {
 		if s.prs[i].Number == number {
 			return clonePR(s.prs[i]), nil
@@ -579,16 +588,24 @@ func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 // AckInstructions acknowledges delivery in bulk, never execution completion.
 // Deprecated: use AckInstruction for a fetched instruction ID to avoid acknowledging new arrivals.
 func (s *Service) AckInstructions(sessionID string, prNumber int) int {
-	s.mu.Lock()
-	s.reloadStateFileIfChangedLocked()
-	s.dirty = true
+	count, _ := s.AckInstructionsChecked(sessionID, prNumber)
+	return count
+}
+
+// AckInstructionsChecked acknowledges delivery and reports persistence errors.
+func (s *Service) AckInstructionsChecked(sessionID string, prNumber int) (int, error) {
+	if err := s.beginStateMutation(); err != nil {
+		return 0, err
+	}
 	acked := s.markInstructionsHandledLocked(sessionID, prNumber)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return 0, err
+	}
 	if acked > 0 {
 		s.broadcast(snap)
 	}
-	return acked
+	return acked, nil
 }
 
 func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) int {
@@ -658,10 +675,12 @@ func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest,
 		author = "Human Operator"
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 	now := time.Now().UTC()
@@ -686,8 +705,10 @@ func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest,
 	s.recordInterSessionLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, text, now)
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -728,10 +749,12 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 		return PullRequest{}, err
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -762,8 +785,10 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 	}
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -797,10 +822,12 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 		return PullRequest{}, err
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -871,8 +898,10 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 	}
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -888,10 +917,12 @@ func (s *Service) AddressReview(prNumber int, instruction string) (PullRequest, 
 		instruction = "Address all open review comments and verify test suite passes."
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -916,8 +947,10 @@ func (s *Service) AddressReview(prNumber int, instruction string) (PullRequest, 
 	s.recordInterSessionLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, instruction, now)
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -934,10 +967,12 @@ func (s *Service) RunRoutineAction(prNumber int, action RoutineAction) (PullRequ
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidRoutineAction, action)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -981,8 +1016,10 @@ func (s *Service) RunRoutineAction(prNumber int, action RoutineAction) (PullRequ
 	s.recordInterSessionLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, actionDesc, now)
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -994,10 +1031,12 @@ func (s *Service) SetAutoMode(prNumber int, enabled bool) (PullRequest, error) {
 	if err := s.ConfigLoadError(); enabled && err != nil {
 		return PullRequest{}, err
 	}
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -1030,8 +1069,10 @@ func (s *Service) SetAutoMode(prNumber int, enabled bool) (PullRequest, error) {
 	}
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1044,10 +1085,12 @@ func (s *Service) SetPRStatus(prNumber int, status PRStatus, summary string) (Pu
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidPRStatus, status)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -1100,8 +1143,10 @@ func (s *Service) SetPRStatus(prNumber int, status PRStatus, summary string) (Pu
 	}
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1119,10 +1164,12 @@ func (s *Service) SetSessionModelTier(sessionID string, tier ModelTier, subagent
 		return Session{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, subagentTier)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Session{}, err
+	}
 	sess, _ := s.findSessionLocked(sessionID)
 	if sess == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
 
@@ -1142,8 +1189,10 @@ func (s *Service) SetSessionModelTier(sessionID string, tier ModelTier, subagent
 	}
 
 	res := cloneSession(*sess)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Session{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1155,10 +1204,12 @@ func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, err
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, tier)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
@@ -1183,8 +1234,10 @@ func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, err
 	})
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1192,7 +1245,9 @@ func (s *Service) SetPRModelTier(prNumber int, tier ModelTier) (PullRequest, err
 
 // UpdateModelConfig updates the concrete model names mapped to the Pine, Bamboo, and Plum presets.
 func (s *Service) UpdateModelConfig(cfg ModelPresetConfig) (ModelPresetConfig, error) {
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return ModelPresetConfig{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	if strings.TrimSpace(cfg.Pine) != "" {
@@ -1216,8 +1271,10 @@ func (s *Service) UpdateModelConfig(cfg ModelPresetConfig) (ModelPresetConfig, e
 	}
 
 	updated := s.modelConfig
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return ModelPresetConfig{}, err
+	}
 
 	s.broadcast(snap)
 	return updated, nil
@@ -1233,10 +1290,12 @@ func (s *Service) SendDirectSessionInstruction(sessionID string, text string) (S
 		return Session{}, ErrEmptyMessage
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Session{}, err
+	}
 	sess, _ := s.findSessionLocked(sessionID)
 	if sess == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
 
@@ -1246,8 +1305,10 @@ func (s *Service) SendDirectSessionInstruction(sessionID string, text string) (S
 	s.recordInterSessionLocked(s.controller.ID, sess.ID, "instruction", 0, text, now)
 
 	res := cloneSession(*sess)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Session{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1263,7 +1324,9 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 		return Session{}, ErrEmptyMessage
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Session{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	now := time.Now().UTC()
@@ -1285,8 +1348,10 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	s.controller.UpdatedAt = now
 
 	res := cloneSession(s.controller)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Session{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1302,15 +1367,17 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidPRStatus, status)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
 	if sessionID != pr.SessionID || strings.TrimSpace(sessionID) == "" {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, ErrInstructionSession
 	}
 	now := time.Now().UTC()
@@ -1351,8 +1418,10 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 	}
 
 	res := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1360,15 +1429,19 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 
 // MarkNotificationRead marks a single notification or all notifications ("all") as read.
 func (s *Service) MarkNotificationRead(id string) error {
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	if id == "all" || id == "" {
 		for i := range s.notifications {
 			s.notifications[i].Read = true
 		}
-		snap := s.snapshotLocked()
-		s.mu.Unlock()
+		snap, err := s.commitStateMutation()
+		if err != nil {
+			return err
+		}
 		s.broadcast(snap)
 		return nil
 	}
@@ -1382,11 +1455,13 @@ func (s *Service) MarkNotificationRead(id string) error {
 		}
 	}
 	if !found {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return fmt.Errorf("%w: %s", ErrNotificationNotFound, id)
 	}
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return err
+	}
 	s.broadcast(snap)
 	return nil
 }
@@ -1401,7 +1476,9 @@ func (s *Service) UpsertWorktree(wt Worktree) (Worktree, error) {
 		wt.Branch = "main"
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Worktree{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	found := false
@@ -1415,8 +1492,10 @@ func (s *Service) UpsertWorktree(wt Worktree) (Worktree, error) {
 	if !found {
 		s.worktrees = append(s.worktrees, wt)
 	}
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Worktree{}, err
+	}
 
 	s.broadcast(snap)
 	return wt, nil
@@ -1441,7 +1520,9 @@ func (s *Service) UpsertSession(sess Session) (Session, error) {
 		return Session{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, sess.SubagentModelTier)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return Session{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	now := time.Now().UTC()
@@ -1470,8 +1551,10 @@ func (s *Service) UpsertSession(sess Session) (Session, error) {
 	}
 
 	res := cloneSession(sess)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return Session{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
@@ -1498,7 +1581,9 @@ func (s *Service) UpsertPR(in PullRequest) (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrInvalidModelTier, in.ModelTier)
 	}
 
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	now := time.Now().UTC()
@@ -1554,8 +1639,10 @@ func (s *Service) UpsertPR(in PullRequest) (PullRequest, error) {
 	}
 
 	res := clonePR(in)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 
 	s.broadcast(snap)
 	return res, nil
