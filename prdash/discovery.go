@@ -160,6 +160,7 @@ func ParseGitWorktreePorcelain(porcelain string) []Worktree {
 }
 
 type ghPRItem struct {
+	HeadRefOid        string           `json:"headRefOid"`
 	Number            int              `json:"number"`
 	Title             string           `json:"title"`
 	Body              string           `json:"body"`
@@ -186,7 +187,7 @@ func DiscoverPullRequests(ctx context.Context, repoFullName, dir string, default
 		"pr", "list",
 		"--state", "open",
 		"--limit", "100",
-		"--json", "number,title,body,headRefName,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
+		"--json", "number,title,body,headRefName,headRefOid,baseRefName,additions,deletions,changedFiles,mergeable,reviewDecision,statusCheckRollup,updatedAt",
 	}
 	if strings.Contains(repoFullName, "/") {
 		args = append(args, "--repo", repoFullName)
@@ -229,6 +230,7 @@ func ParseGitHubPRListJSON(data []byte, defaultBranch string, worktrees []Worktr
 			updated = time.Now().UTC()
 		}
 		pr := PullRequest{
+			HeadSHA:       item.HeadRefOid,
 			ID:            fmt.Sprintf("pr-%d", item.Number),
 			Number:        item.Number,
 			Title:         item.Title,

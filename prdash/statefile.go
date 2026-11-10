@@ -52,45 +52,50 @@ func DefaultStateFile(repoFullName string) (string, error) {
 }
 
 type persistedState struct {
-	Revision      int64             `json:"revision"`
-	Repository    RepositoryInfo    `json:"repository"`
-	ModelConfig   ModelPresetConfig `json:"model_config"`
-	Controller    Session           `json:"controller_session"`
-	Worktrees     []Worktree        `json:"worktrees"`
-	Sessions      []Session         `json:"sessions"`
-	PullRequests  []PullRequest     `json:"pull_requests"`
-	Notifications []Notification    `json:"notifications"`
-	Seq           int64             `json:"seq"`
+	InstructionClaims map[string]string `json:"instruction_claims,omitempty"`
+	Revision          int64             `json:"revision"`
+	Repository        RepositoryInfo    `json:"repository"`
+	ModelConfig       ModelPresetConfig `json:"model_config"`
+	Controller        Session           `json:"controller_session"`
+	Worktrees         []Worktree        `json:"worktrees"`
+	Sessions          []Session         `json:"sessions"`
+	PullRequests      []PullRequest     `json:"pull_requests"`
+	Notifications     []Notification    `json:"notifications"`
+	Seq               int64             `json:"seq"`
 }
 
-func (s *Service) saveStateFileLocked() {
+func (s *Service) saveStateFileLocked() error {
 	if s.stateFile == "" {
-		return
+		return nil
 	}
-	s.stateRev++
 	payload := persistedState{
-		Revision:      s.stateRev,
-		Repository:    s.repo,
-		ModelConfig:   s.modelConfig,
-		Controller:    s.controller,
-		Worktrees:     s.worktrees,
-		Sessions:      s.sessions,
-		PullRequests:  s.prs,
-		Notifications: s.notifications,
-		Seq:           s.seq.Load(),
+		Revision:          s.stateRev + 1,
+		InstructionClaims: s.instructionClaims,
+		Repository:        s.repo,
+		ModelConfig:       s.modelConfig,
+		Controller:        s.controller,
+		Worktrees:         s.worktrees,
+		Sessions:          s.sessions,
+		PullRequests:      s.prs,
+		Notifications:     s.notifications,
+		Seq:               s.seq.Load(),
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(s.stateFile), 0o755); err != nil {
-		return
+		return err
 	}
 	tmp := s.stateFile + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
+		return err
 	}
-	_ = os.Rename(tmp, s.stateFile)
+	if err := os.Rename(tmp, s.stateFile); err != nil {
+		return err
+	}
+	s.stateRev++
+	return nil
 }
 
 func (s *Service) reloadStateFileIfChangedLocked() bool {
@@ -108,6 +113,7 @@ func (s *Service) reloadStateFileIfChangedLocked() bool {
 	if payload.Revision <= s.stateRev {
 		return false
 	}
+	s.instructionClaims = payload.InstructionClaims
 	s.stateRev = payload.Revision
 	s.repo = payload.Repository
 	s.modelConfig = payload.ModelConfig
