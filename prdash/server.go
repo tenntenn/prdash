@@ -65,7 +65,11 @@ func NewHandler(svc *Service) http.Handler {
 			PRNumber int `json:"pr_number"`
 		}
 		_ = decodeJSON(r, &body)
-		acked := svc.AckInstructions(id, body.PRNumber)
+		acked, err := svc.AckInstructionsChecked(id, body.PRNumber)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"acked": acked})
 	})
 

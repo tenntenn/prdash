@@ -2,7 +2,9 @@ package prdash
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,64 +70,77 @@ func (s *Service) saveStateFileLocked() error {
 	if s.stateFile == "" {
 		return nil
 	}
-	payload := persistedState{
-		Revision:          s.stateRev + 1,
-		InstructionClaims: s.instructionClaims,
-		Repository:        s.repo,
-		ModelConfig:       s.modelConfig,
-		Controller:        s.controller,
-		Worktrees:         s.worktrees,
-		Sessions:          s.sessions,
-		PullRequests:      s.prs,
-		Notifications:     s.notifications,
-		Seq:               s.seq.Load(),
+	if s.transaction == nil {
+		return errors.New("state write requires a transaction")
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
+	// Detect a writer that did not honor the sidecar lock, including same-revision edits.
+	current, err := os.ReadFile(s.stateFile)
+	if errors.Is(err, os.ErrNotExist) && s.stateRev == 0 {
+		current = nil
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.stateFile), 0o755); err != nil {
+	var hash [sha256.Size]byte
+	if current != nil {
+		hash = sha256.Sum256(current)
+	}
+	if hash != s.stateHash {
+		return ErrStateConflict
+	}
+	payload := s.captureStateLocked()
+	payload.Revision = s.stateRev + 1
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize state: %w", err)
+	}
+	if err := writeAtomicState(s.stateFile, data); err != nil {
 		return err
 	}
-	tmp := s.stateFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.stateFile); err != nil {
-		return err
-	}
-	s.stateRev++
+
+	s.stateRev = payload.Revision
+	s.stateHash = sha256.Sum256(data)
 	return nil
 }
 
-func (s *Service) reloadStateFileIfChangedLocked() bool {
+func (s *Service) loadStateFileLocked() (bool, error) {
 	if s.stateFile == "" {
-		return false
+		return false, nil
 	}
 	data, err := os.ReadFile(s.stateFile)
+	if errors.Is(err, os.ErrNotExist) && s.stateRev == 0 {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, fmt.Errorf("%w: read state: %w", ErrStatePersistence, err)
 	}
 	var payload persistedState
 	if err := json.Unmarshal(data, &payload); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrStateCorrupt, err)
+	}
+	if payload.Revision <= 0 || payload.Controller.ID == "" {
+		return false, fmt.Errorf("%w: missing revision or controller", ErrStateCorrupt)
+	}
+	hash := sha256.Sum256(data)
+	if payload.Revision < s.stateRev || payload.Revision == s.stateRev && hash != s.stateHash {
+		return false, ErrStateConflict
+	}
+	if payload.Revision == s.stateRev {
+		return false, nil
+	}
+	s.restoreStateLocked(payload)
+	s.stateHash = hash
+	return true, nil
+}
+
+func (s *Service) reloadStateFileIfChangedLocked() bool {
+	if s.transaction != nil {
 		return false
 	}
-	if payload.Revision <= s.stateRev {
-		return false
-	}
-	s.instructionClaims = payload.InstructionClaims
-	s.stateRev = payload.Revision
-	s.repo = payload.Repository
-	s.modelConfig = payload.ModelConfig
-	s.controller = payload.Controller
-	s.worktrees = payload.Worktrees
-	s.sessions = payload.Sessions
-	s.prs = payload.PullRequests
-	s.notifications = payload.Notifications
-	if payload.Seq > s.seq.Load() {
-		s.seq.Store(payload.Seq)
-	}
-	return true
+	changed, err := s.loadStateFileLocked()
+	s.stateErr = err
+	return changed
 }
 
 // WatchStateFile monitors the configured state file for external changes (such as from an MCP process)
@@ -157,4 +172,29 @@ func (s *Service) WatchStateFile(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}
+}
+
+// writeAtomicState uses a private temporary file in the same directory, so an
+// interrupted or competing writer cannot reuse another writer's temporary path.
+func writeAtomicState(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if _, err = file.Write(data); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return nil
 }

@@ -104,6 +104,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Plum:   *plumModel,
 		},
 	})
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -205,6 +208,9 @@ func runStatusCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -243,6 +249,9 @@ func runSyncCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -283,6 +292,9 @@ func runInstructionsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -329,6 +341,9 @@ func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -399,6 +414,9 @@ func runReportCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return errors.New("--pr is required")
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}
@@ -440,6 +458,9 @@ func runSendCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	if err := svc.StateError(); err != nil {
+		return err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return err
 	}

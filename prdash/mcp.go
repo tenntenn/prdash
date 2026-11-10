@@ -198,7 +198,8 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 			PRNumber  int    `json:"pr_number"`
 		}
 		_ = json.Unmarshal(rawArgs, &args)
-		return map[string]any{"acked": svc.AckInstructions(args.SessionID, args.PRNumber)}, nil
+		acked, err := svc.AckInstructionsChecked(args.SessionID, args.PRNumber)
+		return map[string]any{"acked": acked}, err
 
 	case "list_prs":
 		var args struct {

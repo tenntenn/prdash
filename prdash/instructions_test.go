@@ -285,13 +285,19 @@ func TestInstructionPersistenceFailureRollsBackClaim(t *testing.T) {
 	if !errors.Is(err, prdash.ErrInstructionPersistence) || claim.ClaimToken != "" {
 		t.Fatalf("undurable claim returned: %+v %v", claim, err)
 	}
-	current, err := svc.GetInstruction("worker", msg.ID)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := svc.GetInstruction("worker", msg.ID); !errors.Is(err, prdash.ErrStatePersistence) {
+		t.Fatalf("state read error suppressed: %v", err)
+	}
+	var current prdash.SessionMessage
+	for _, stored := range svc.Snapshot().ControllerSession.Messages {
+		if stored.ID == msg.ID {
+			current = stored
+		}
 	}
 	if current.ExecutionState != prdash.InstructionQueued || current.Attempt != 0 {
 		t.Fatalf("claim not rolled back: %+v", current)
 	}
+
 }
 
 func TestInstructionHTTP(t *testing.T) {

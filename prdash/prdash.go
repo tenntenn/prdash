@@ -241,6 +241,8 @@ type DashboardSummary struct {
 
 // Snapshot contains the complete state of the dashboard for a target repository.
 type Snapshot struct {
+	StatePath         string            `json:"state_path,omitempty"`
+	StateError        string            `json:"state_error,omitempty"`
 	Config            EffectiveConfig   `json:"config"`
 	ConfigError       string            `json:"config_error,omitempty"`
 	Repository        RepositoryInfo    `json:"repository"`
