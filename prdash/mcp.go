@@ -169,6 +169,10 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 	}
 
 	switch name {
+	case "get_config":
+		return svc.EffectiveConfig(), svc.ConfigLoadError()
+	case "reload_config":
+		return svc.ReloadConfig(ctx)
 	case "get_dashboard":
 		return svc.Snapshot(), nil
 
@@ -380,6 +384,8 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 
 func mcpToolsList() []mcpTool {
 	return []mcpTool{
+		{Name: "get_config", Description: "Read effective repository settings and default provenance.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
+		{Name: "reload_config", Description: "Reload prdash.yaml for the service repository; already dispatched requests retain their captured settings.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{
 			Name:        "get_dashboard",
 			Description: "Get the complete prdash snapshot for the target repository, including pull requests, stacked chains, sessions, worktrees, model presets, and notifications.",

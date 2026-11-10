@@ -24,6 +24,18 @@ func NewHandler(svc *Service) http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(webSub))
 
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"config": svc.EffectiveConfig(), "error": svc.Snapshot().ConfigError})
+	})
+	mux.HandleFunc("POST /api/config/reload", func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := svc.ReloadConfig(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	})
+
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, svc.Snapshot())
 	})
@@ -455,6 +467,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrConfigValidation):
+		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
