@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tenntenn/prdash/prdash"
 )
 
 func TestRunVersionAndSkill(t *testing.T) {
@@ -68,4 +71,62 @@ func TestRunVersionAndSkill(t *testing.T) {
 			t.Fatalf("skill force update error: %v", err)
 		}
 	})
+}
+
+func TestCLISubcommandsWorkflow(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	svc := prdash.NewService(prdash.Options{
+		Repository: "example/sample",
+		StateFile:  statePath,
+		Reviewer:   prdash.NewStubSBNNClient(),
+	})
+	if _, err := svc.UpsertWorktree(prdash.Worktree{ID: "wt-1", Path: "/tmp/wt-1", Branch: "feat/one", SessionID: "sess-1"}); err != nil {
+		t.Fatalf("UpsertWorktree: %v", err)
+	}
+	if _, err := svc.UpsertSession(prdash.Session{ID: "sess-1", Name: "Worker 1", WorktreeID: "wt-1"}); err != nil {
+		t.Fatalf("UpsertSession: %v", err)
+	}
+	if _, err := svc.UpsertPR(prdash.PullRequest{Number: 1, Title: "sample-pr", Branch: "feat/one", SessionID: "sess-1", WorktreeID: "wt-1"}); err != nil {
+		t.Fatalf("UpsertPR: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	// 1. status
+	if err := run(t.Context(), []string{"status", "--repo", "example/sample", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("status error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "repository: example/sample") {
+		t.Fatalf("unexpected status output: %q", stdout.String())
+	}
+
+	// 2. send instruction to PR #1
+	stdout.Reset()
+	if err := run(t.Context(), []string{"send", "--pr", "1", "-m", "sample-cli-instruction", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("send error: %v", err)
+	}
+
+	// 3. wait returns immediately when an unhandled instruction is present
+	stdout.Reset()
+	if err := run(t.Context(), []string{"wait", "--session", "sess-1", "--timeout", "200ms", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("wait error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "sample-cli-instruction") {
+		t.Fatalf("expected instruction in wait output, got %q", stdout.String())
+	}
+
+	// 4. report completion from sess-1 marks instruction handled
+	stdout.Reset()
+	if err := run(t.Context(), []string{"report", "--pr", "1", "--status", "waiting_for_human", "-m", "sample-cli-report", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("report error: %v", err)
+	}
+
+	// 5. wait times out with errWaitTimeout once instructions are handled
+	stdout.Reset()
+	err := run(t.Context(), []string{"wait", "--session", "sess-1", "--timeout", "150ms", "--state", statePath}, strings.NewReader(""), &stdout, &stderr)
+	if !errors.Is(err, errWaitTimeout) {
+		t.Fatalf("expected errWaitTimeout after report, got %v", err)
+	}
 }

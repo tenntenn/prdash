@@ -3,10 +3,53 @@ package prdash
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
+
+// StateDir returns the directory holding persistent prdash repository state files,
+// following the XDG base directory specification on Unix.
+func StateDir() (string, error) {
+	var base string
+	switch {
+	case os.Getenv("XDG_STATE_HOME") != "":
+		base = os.Getenv("XDG_STATE_HOME")
+	case runtime.GOOS == "windows" || runtime.GOOS == "darwin":
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		base = dir
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	dir := filepath.Join(base, "prdash")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create state dir: %w", err)
+	}
+	return dir, nil
+}
+
+// DefaultStateFile returns the default persistent state file path for repoFullName.
+func DefaultStateFile(repoFullName string) (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	slug := sanitizeID(strings.ReplaceAll(strings.TrimSpace(repoFullName), "/", "__"))
+	if slug == "" {
+		slug = "default"
+	}
+	return filepath.Join(dir, "state-"+slug+".json"), nil
+}
 
 type persistedState struct {
 	Revision      int64             `json:"revision"`

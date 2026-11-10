@@ -116,27 +116,6 @@ func NewService(opts Options) *Service {
 	return svc
 }
 
-// SeedSynthetic populates svc with synthetic repository fixtures for testing and documentation screenshots.
-func (s *Service) SeedSynthetic() {
-	s.mu.Lock()
-	if s.repo.FullName == "" {
-		s.repo = RepositoryInfo{
-			Owner:         "acme",
-			Name:          "nebula-api",
-			FullName:      "acme/nebula-api",
-			DefaultBranch: "main",
-			LocalPath:     "/workspace/repos/nebula-api",
-		}
-	} else if s.repo.LocalPath == "" {
-		s.repo.LocalPath = "/workspace/repos/" + s.repo.Name
-	}
-	s.controller, s.worktrees, s.sessions, s.prs, s.notifications = seedData(s.repo, s.modelConfig)
-	s.dirty = true
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
-	s.broadcast(snap)
-}
-
 // SyncRepository inspects the git repository at dir (or s.workDir / current directory),
 // discovers local git worktrees and open GitHub pull requests, and merges them into the service state.
 func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, error) {
@@ -409,11 +388,6 @@ func buildStackGroups(prs []PullRequest) []StackGroup {
 	groups := make([]StackGroup, 0, len(prs))
 	stackIndex := make(map[string]int)
 
-	stackTitles := map[string]string{
-		"stack-oauth":   "OAuth2 & Session Security Stack",
-		"stack-storage": "Storage Cursor & Snapshot Retention Stack",
-	}
-
 	for _, pr := range prs {
 		if pr.StackID == "" {
 			groups = append(groups, StackGroup{
@@ -426,15 +400,11 @@ func buildStackGroups(prs []PullRequest) []StackGroup {
 		}
 		idx, exists := stackIndex[pr.StackID]
 		if !exists {
-			title := stackTitles[pr.StackID]
-			if title == "" {
-				title = "Stacked PR Chain (" + pr.StackID + ")"
-			}
 			idx = len(groups)
 			stackIndex[pr.StackID] = idx
 			groups = append(groups, StackGroup{
 				ID:        pr.StackID,
-				Title:     title,
+				Title:     "Stacked PR Chain (" + pr.StackID + ")",
 				IsStacked: true,
 			})
 		}
@@ -449,6 +419,9 @@ func buildStackGroups(prs []PullRequest) []StackGroup {
 			size := len(groups[i].PullRequests)
 			for j := range groups[i].PullRequests {
 				groups[i].PullRequests[j].StackSize = size
+			}
+			if size > 0 && groups[i].PullRequests[0].Title != "" {
+				groups[i].Title = fmt.Sprintf("Stack: %s (#%d)", groups[i].PullRequests[0].Title, groups[i].PullRequests[0].Number)
 			}
 		}
 	}
@@ -550,7 +523,7 @@ func (s *Service) ListPRs(statusFilter string, stackID string) []PullRequest {
 	return out
 }
 
-// PendingInstructions returns instructions queued for sessionID (or all sessions if empty).
+// PendingInstructions returns unhandled instructions queued for sessionID (or all sessions if empty).
 func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -567,7 +540,7 @@ func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 
 	out := make([]SessionMessage, 0, len(source))
 	for _, msg := range source {
-		if msg.Direction != "instruction" {
+		if msg.Direction != "instruction" || msg.Handled {
 			continue
 		}
 		if sessionID != "" && msg.To != sessionID && !(sessionID == "controller" && msg.To == s.controller.ID) {
@@ -576,6 +549,70 @@ func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 		out = append(out, msg)
 	}
 	return out
+}
+
+// AckInstructions marks unhandled instructions for sessionID (and optional prNumber) as handled.
+func (s *Service) AckInstructions(sessionID string, prNumber int) int {
+	s.mu.Lock()
+	s.reloadStateFileIfChangedLocked()
+	s.dirty = true
+	acked := s.markInstructionsHandledLocked(sessionID, prNumber)
+	snap := s.snapshotLocked()
+	s.mu.Unlock()
+	if acked > 0 {
+		s.broadcast(snap)
+	}
+	return acked
+}
+
+func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) int {
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "controller" {
+		targetID = s.controller.ID
+	}
+	acked := 0
+	for i := range s.controller.Messages {
+		m := &s.controller.Messages[i]
+		if m.Direction != "instruction" || m.Handled {
+			continue
+		}
+		if targetID != "" && m.To != targetID {
+			continue
+		}
+		if prNumber > 0 && m.PRNumber != prNumber {
+			continue
+		}
+		m.Handled = true
+		acked++
+	}
+	for si := range s.sessions {
+		if targetID != "" && s.sessions[si].ID != targetID {
+			continue
+		}
+		for mi := range s.sessions[si].Messages {
+			m := &s.sessions[si].Messages[mi]
+			if m.Direction != "instruction" || m.Handled {
+				continue
+			}
+			if prNumber > 0 && m.PRNumber != prNumber {
+				continue
+			}
+			m.Handled = true
+		}
+	}
+	if targetID == "" || targetID == s.controller.ID {
+		hasPending := false
+		for _, m := range s.controller.Messages {
+			if m.Direction == "instruction" && !m.Handled && m.To == s.controller.ID {
+				hasPending = true
+				break
+			}
+		}
+		if !hasPending {
+			s.controller.Status = "coordinating"
+		}
+	}
+	return acked
 }
 
 // SendPRMessage appends an instruction to a PR's session thread, routes it to the assigned session,
@@ -996,6 +1033,7 @@ func (s *Service) SetPRStatus(prNumber int, status PRStatus, summary string) (Pu
 	})
 
 	if status == StatusWaitingForHuman && prevStatus != StatusWaitingForHuman {
+		s.markInstructionsHandledLocked(pr.SessionID, pr.Number)
 		s.recordInterSessionLocked(pr.SessionID, s.controller.ID, "report", pr.Number, summary, now)
 		s.emitNotificationLocked(
 			pr,
@@ -1239,6 +1277,7 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 		Text:      report,
 		CreatedAt: now,
 	})
+	s.markInstructionsHandledLocked(sessionID, pr.Number)
 	s.recordInterSessionLocked(sessionID, s.controller.ID, "report", pr.Number, report, now)
 
 	if status == StatusWaitingForHuman && prevStatus != StatusWaitingForHuman {

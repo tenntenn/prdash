@@ -2,7 +2,10 @@
 // and Model Context Protocol (MCP) server for managing pull requests created by AI agent sessions.
 package prdash
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // PRStatus represents who currently owns the next action on a pull request.
 type PRStatus string
@@ -68,6 +71,38 @@ func (c ModelPresetConfig) Resolve(tier ModelTier) string {
 	}
 }
 
+// DefaultModelPresetConfig returns the default mapping for Pine, Bamboo, and Plum model presets.
+func DefaultModelPresetConfig() ModelPresetConfig {
+	return ModelPresetConfig{
+		Pine:   "claude-opus-4-6",
+		Bamboo: "claude-sonnet-4-6",
+		Plum:   "claude-haiku-4-5",
+	}
+}
+
+// ParseRepositoryInfo builds RepositoryInfo from a "owner/name" string.
+func ParseRepositoryInfo(repoFullName string) RepositoryInfo {
+	cleaned := strings.TrimSpace(repoFullName)
+	if cleaned == "" {
+		return RepositoryInfo{
+			DefaultBranch: "main",
+		}
+	}
+	owner := ""
+	name := cleaned
+	if parts := strings.SplitN(cleaned, "/", 2); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		owner = parts[0]
+		name = parts[1]
+		cleaned = owner + "/" + name
+	}
+	return RepositoryInfo{
+		Owner:         owner,
+		Name:          name,
+		FullName:      cleaned,
+		DefaultBranch: "main",
+	}
+}
+
 // RepositoryInfo describes the target repository managed by a dashboard instance.
 type RepositoryInfo struct {
 	Owner         string `json:"owner"`
@@ -95,6 +130,7 @@ type SessionMessage struct {
 	Direction string    `json:"direction"` // "instruction" or "report"
 	PRNumber  int       `json:"pr_number,omitempty"`
 	Text      string    `json:"text"`
+	Handled   bool      `json:"handled,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

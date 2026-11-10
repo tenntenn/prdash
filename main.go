@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,7 +22,12 @@ import (
 	"github.com/tenntenn/prdash/skills"
 )
 
-const version = "0.1.0"
+const (
+	version         = "0.1.0"
+	exitWaitTimeout = 2
+)
+
+var errWaitTimeout = errors.New("timed out waiting for pending instructions")
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -28,13 +35,31 @@ func main() {
 
 	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "prdash:", err)
+		if errors.Is(err, errWaitTimeout) {
+			os.Exit(exitWaitTimeout)
+		}
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) > 0 && args[0] == "skill" {
-		return runSkill(args[1:], stdout, stderr)
+	if len(args) > 0 {
+		switch args[0] {
+		case "skill":
+			return runSkill(args[1:], stdout, stderr)
+		case "status":
+			return runStatusCmd(ctx, args[1:], stdout, stderr)
+		case "sync":
+			return runSyncCmd(ctx, args[1:], stdout, stderr)
+		case "instructions":
+			return runInstructionsCmd(ctx, args[1:], stdout, stderr)
+		case "wait":
+			return runWaitCmd(ctx, args[1:], stdout, stderr)
+		case "report":
+			return runReportCmd(ctx, args[1:], stdout, stderr)
+		case "send":
+			return runSendCmd(ctx, args[1:], stdout, stderr)
+		}
 	}
 
 	fs := flag.NewFlagSet("prdash", flag.ContinueOnError)
@@ -45,7 +70,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		repo        = fs.String("repo", "", "Target repository in owner/name format (auto-detected from git remote if omitted)")
 		workDir     = fs.String("dir", "", "Target git repository directory (defaults to current working directory)")
 		noSync      = fs.Bool("no-sync", false, "Skip automatic git worktree and GitHub PR discovery on startup")
-		stateFile   = fs.String("state", "", "Optional JSON file path to synchronize state between Web and MCP processes")
+		stateFile   = fs.String("state", "", "JSON state file path (defaults to $XDG_STATE_HOME/prdash/state-<repo>.json; use 'off' for in-memory)")
 		mcpMode     = fs.Bool("mcp", false, "Run as a Model Context Protocol (MCP) server over stdio")
 		pineModel   = fs.String("model-pine", "claude-opus-4-6", "Model identifier for the Pine (High) preset")
 		bambooModel = fs.String("model-bamboo", "claude-sonnet-4-6", "Model identifier for the Bamboo (Standard) preset")
@@ -64,10 +89,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return err
 	}
 
+	resolvedRepo, resolvedState := resolveRepoAndState(ctx, *repo, *workDir, *stateFile)
 	svc := prdash.NewService(prdash.Options{
-		Repository: *repo,
+		Repository: resolvedRepo,
 		WorkDir:    *workDir,
-		StateFile:  *stateFile,
+		StateFile:  resolvedState,
 		ModelConfig: &prdash.ModelPresetConfig{
 			Pine:   *pineModel,
 			Bamboo: *bambooModel,
@@ -91,7 +117,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	var wg sync.WaitGroup
-	if *stateFile != "" {
+	if resolvedState != "" {
 		wg.Go(func() {
 			svc.WatchStateFile(ctx, 250*time.Millisecond)
 		})
@@ -125,6 +151,302 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case serveErr := <-errCh:
 		return serveErr
 	}
+}
+
+func resolveRepoAndState(ctx context.Context, repoFlag, dirFlag, stateFlag string) (string, string) {
+	repoName := strings.TrimSpace(repoFlag)
+	if repoName == "" {
+		detected := prdash.DetectRepositoryInfo(ctx, dirFlag)
+		repoName = detected.FullName
+	}
+	sf := strings.TrimSpace(stateFlag)
+	switch strings.ToLower(sf) {
+	case "off", "none", "no":
+		return repoName, ""
+	case "":
+		if defPath, err := prdash.DefaultStateFile(repoName); err == nil {
+			return repoName, defPath
+		}
+		return repoName, ""
+	default:
+		return repoName, sf
+	}
+}
+
+func openCLIService(ctx context.Context, repoFlag, dirFlag, stateFlag string) *prdash.Service {
+	resolvedRepo, resolvedState := resolveRepoAndState(ctx, repoFlag, dirFlag, stateFlag)
+	return prdash.NewService(prdash.Options{
+		Repository: resolvedRepo,
+		WorkDir:    dirFlag,
+		StateFile:  resolvedState,
+	})
+}
+
+func runStatusCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		repo      = fs.String("repo", "", "Target repository in owner/name format")
+		dir       = fs.String("dir", "", "Target git repository directory")
+		stateFile = fs.String("state", "", "State file path")
+		asJSON    = fs.Bool("json", false, "Print full snapshot as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	snap := svc.Snapshot()
+	if *asJSON {
+		return writePrettyJSON(stdout, snap)
+	}
+	_, err := fmt.Fprintf(
+		stdout,
+		"repository: %s (default: %s)\nworktrees: %d | sessions: %d | pull requests: %d (waiting_for_human: %d, working: %d, stacks: %d)\n",
+		snap.Repository.FullName,
+		snap.Repository.DefaultBranch,
+		snap.Summary.ManagedWorktrees,
+		snap.Summary.ActiveSessions,
+		snap.Summary.TotalPRs,
+		snap.Summary.WaitingForHuman,
+		snap.Summary.AgentWorking,
+		snap.Summary.StackedChains,
+	)
+	return err
+}
+
+func runSyncCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash sync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		repo      = fs.String("repo", "", "Target repository in owner/name format")
+		dir       = fs.String("dir", "", "Target git repository directory")
+		stateFile = fs.String("state", "", "State file path")
+		asJSON    = fs.Bool("json", false, "Print synchronized snapshot as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	snap, err := svc.SyncRepository(ctx, *dir)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return writePrettyJSON(stdout, snap)
+	}
+	_, writeErr := fmt.Fprintf(
+		stdout,
+		"synced %s: %d worktree(s), %d pull request(s), %d stack(s)\n",
+		snap.Repository.FullName,
+		len(snap.Worktrees),
+		len(snap.PullRequests),
+		snap.Summary.StackedChains,
+	)
+	return writeErr
+}
+
+func runInstructionsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash instructions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		sessionID = fs.String("session", "", "Filter by session ID (or 'controller')")
+		ack       = fs.Bool("ack", false, "Mark returned instructions as handled")
+		prNum     = fs.Int("pr", 0, "Optional PR number filter when acknowledging")
+		repo      = fs.String("repo", "", "Target repository in owner/name format")
+		dir       = fs.String("dir", "", "Target git repository directory")
+		stateFile = fs.String("state", "", "State file path")
+		asJSON    = fs.Bool("json", false, "Print pending instructions as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	pending := svc.PendingInstructions(*sessionID)
+	if *ack && len(pending) > 0 {
+		svc.AckInstructions(*sessionID, *prNum)
+	}
+	if *asJSON {
+		return writePrettyJSON(stdout, pending)
+	}
+	for _, m := range pending {
+		if m.PRNumber > 0 {
+			_, _ = fmt.Fprintf(stdout, "[%s] %s -> %s (PR #%d): %s\n", m.ID, m.From, m.To, m.PRNumber, m.Text)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "[%s] %s -> %s: %s\n", m.ID, m.From, m.To, m.Text)
+		}
+	}
+	return nil
+}
+
+func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash wait", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		sessionID = fs.String("session", "", "Session ID to wait on (or 'controller')")
+		timeout   = fs.Duration("timeout", 0, "Maximum duration to wait (0 waits until interrupted)")
+		ack       = fs.Bool("ack", false, "Mark instructions as handled once received")
+		repo      = fs.String("repo", "", "Target repository in owner/name format")
+		dir       = fs.String("dir", "", "Target git repository directory")
+		stateFile = fs.String("state", "", "State file path")
+		asJSON    = fs.Bool("json", false, "Print received instructions as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+
+	waitCtx := ctx
+	if *timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		pending := svc.PendingInstructions(*sessionID)
+		if len(pending) > 0 {
+			if *ack {
+				svc.AckInstructions(*sessionID, 0)
+			}
+			if *asJSON {
+				return writePrettyJSON(stdout, pending)
+			}
+			for _, m := range pending {
+				if m.PRNumber > 0 {
+					_, _ = fmt.Fprintf(stdout, "[%s] %s -> %s (PR #%d): %s\n", m.ID, m.From, m.To, m.PRNumber, m.Text)
+				} else {
+					_, _ = fmt.Fprintf(stdout, "[%s] %s -> %s: %s\n", m.ID, m.From, m.To, m.Text)
+				}
+			}
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return errWaitTimeout
+			}
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func runReportCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash report", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		prNum     = fs.Int("pr", 0, "Pull request number")
+		sessionID = fs.String("session", "", "Worker session ID (defaults to PR's assigned session)")
+		status    = fs.String("status", string(prdash.StatusWaitingForHuman), "Target PR status: waiting_for_human or working")
+		message   = fs.String("m", "", "Result summary / report message")
+		repo      = fs.String("repo", "", "Target repository in owner/name format")
+		dir       = fs.String("dir", "", "Target git repository directory")
+		stateFile = fs.String("state", "", "State file path")
+		asJSON    = fs.Bool("json", false, "Print updated pull request as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *prNum <= 0 {
+		return errors.New("--pr is required")
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	sid := strings.TrimSpace(*sessionID)
+	if sid == "" {
+		if pr, err := svc.GetPR(*prNum); err == nil {
+			sid = pr.SessionID
+		}
+	}
+	pr, err := svc.ReportSessionResult(sid, *prNum, prdash.PRStatus(*status), *message)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return writePrettyJSON(stdout, pr)
+	}
+	_, writeErr := fmt.Fprintf(stdout, "PR #%d status=%s (%s)\n", pr.Number, pr.Status, *message)
+	return writeErr
+}
+
+func runSendCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("prdash send", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		prNum      = fs.Int("pr", 0, "Target pull request number")
+		sessionID  = fs.String("session", "", "Target worker session ID")
+		controller = fs.Bool("controller", false, "Send instruction to the dashboard controller session")
+		author     = fs.String("author", "CLI Operator", "Instruction author name")
+		message    = fs.String("m", "", "Instruction text")
+		repo       = fs.String("repo", "", "Target repository in owner/name format")
+		dir        = fs.String("dir", "", "Target git repository directory")
+		stateFile  = fs.String("state", "", "State file path")
+		asJSON     = fs.Bool("json", false, "Print updated entity as JSON")
+	)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	svc := openCLIService(ctx, *repo, *dir, *stateFile)
+	switch {
+	case *prNum > 0:
+		pr, err := svc.SendPRMessage(*prNum, *author, *message)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return writePrettyJSON(stdout, pr)
+		}
+		_, writeErr := fmt.Fprintf(stdout, "queued instruction for PR #%d (%s)\n", pr.Number, pr.SessionID)
+		return writeErr
+	case *sessionID != "":
+		sess, err := svc.SendDirectSessionInstruction(*sessionID, *message)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return writePrettyJSON(stdout, sess)
+		}
+		_, writeErr := fmt.Fprintf(stdout, "queued instruction for session %s\n", sess.ID)
+		return writeErr
+	case *controller:
+		sess, err := svc.SendControllerInstruction(*message)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return writePrettyJSON(stdout, sess)
+		}
+		_, writeErr := fmt.Fprintf(stdout, "queued instruction for controller session %s\n", sess.ID)
+		return writeErr
+	default:
+		return errors.New("specify one of --pr, --session, or --controller")
+	}
+}
+
+func writePrettyJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 func runSkill(args []string, stdout, stderr io.Writer) error {

@@ -46,6 +46,16 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, svc.PendingInstructions(id))
 	})
 
+	mux.HandleFunc("POST /api/sessions/{id}/ack", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var body struct {
+			PRNumber int `json:"pr_number"`
+		}
+		_ = decodeJSON(r, &body)
+		acked := svc.AckInstructions(id, body.PRNumber)
+		writeJSON(w, http.StatusOK, map[string]any{"acked": acked})
+	})
+
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
