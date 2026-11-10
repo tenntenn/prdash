@@ -300,9 +300,7 @@ func TestInstructionHTTP(t *testing.T) {
 	msg := queueInstruction(t, svc, "http")
 	handler := prdash.NewHandler(svc)
 	path := "/api/sessions/worker/instructions/" + msg.ID
-	req := httptest.NewRequest(http.MethodPost, path+"/claim", strings.NewReader(`{"consumer_id":"consumer"}`))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec := instructionHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"consumer"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("claim HTTP %d: %s", rec.Code, rec.Body.String())
 	}
@@ -314,15 +312,11 @@ func TestInstructionHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest(http.MethodPost, path+"/result", strings.NewReader(string(payload)))
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec = instructionHTTP(t, handler, http.MethodPost, path+"/result", string(payload))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("result HTTP %d: %s", rec.Code, rec.Body.String())
 	}
-	req = httptest.NewRequest(http.MethodPost, path+"/claim", strings.NewReader(`{"consumer_id":"other"}`))
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	rec = instructionHTTP(t, handler, http.MethodPost, path+"/claim", `{"consumer_id":"other"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate claim HTTP %d", rec.Code)
 	}
@@ -445,4 +439,32 @@ func TestInstructionStatusChangeDoesNotAcknowledge(t *testing.T) {
 	if _, err := svc.ReportSessionResult("other", 1, prdash.StatusWorking, "wrong session"); !errors.Is(err, prdash.ErrInstructionSession) {
 		t.Fatalf("unassigned legacy report: %v", err)
 	}
+}
+
+// Bootstrap when the server requires authentication. The pre-auth API also
+// works, allowing this test to exercise the independent instruction endpoints.
+func instructionHTTP(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	authReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/auth", nil)
+	authReq.RemoteAddr = "127.0.0.1:12345"
+	authReq.Header.Set("X-Prdash-Client", "dashboard")
+	authRec := httptest.NewRecorder()
+	handler.ServeHTTP(authRec, authReq)
+	var auth struct {
+		Token string `json:"token"`
+	}
+	if authRec.Code == http.StatusOK {
+		if err := json.Unmarshal(authRec.Body.Bytes(), &auth); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	if auth.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+auth.Token)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
 }
