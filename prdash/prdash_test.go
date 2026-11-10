@@ -273,8 +273,8 @@ func TestRoutineActionsQueueWorkUntilSessionReportsResult(t *testing.T) {
 			if completed.Status != prdash.StatusWaitingForHuman || completed.HasConflicts || completed.CIStatus != "passing" {
 				t.Fatalf("unexpected PR state after session report: %+v", completed)
 			}
-			if rem := svc.PendingInstructions(pr.SessionID); len(rem) != 0 {
-				t.Fatalf("expected pending instructions to be marked handled after ReportSessionResult, got %+v", rem)
+			if rem := svc.PendingInstructions(pr.SessionID); len(rem) == 0 {
+				t.Fatal("legacy report must not acknowledge instructions without their IDs")
 			}
 		})
 	}

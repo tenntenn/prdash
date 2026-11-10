@@ -81,11 +81,11 @@ $ prdash status                        # show repository summary (worktrees, ses
 $ prdash sync                          # refresh git worktrees and open GitHub PRs
 $ prdash wait --session controller     # block until a human instruction arrives
 $ prdash instructions --session sess-1 # list unhandled instructions for a session
-$ prdash report --pr 42 -m "Fixed CI"  # report completion and transition PR to waiting_for_human
+$ prdash report --pr 42 -m "Fixed CI"  # legacy status report; does not acknowledge instructions
 $ prdash send --pr 42 -m "Run tests"   # queue an instruction for a PR session
 ```
 
-Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so the Web UI, CLI subcommands, and MCP server (`prdash -mcp`) share state out of the box without needing manual `-state` flags.
+Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so sequential invocations can reuse state without manual `-state` flags. Parallel consumers must use one running server via `prdash instruction -server`; independent processes writing the same file are not transactionally coordinated.
 
 On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header, `prdash sync` is run, or `sync_repository` is called via MCP), `prdash` automatically:
 1. Detects the repository (`owner/name`, default branch, local root) via `git`.
@@ -119,7 +119,7 @@ The same core logic can be exposed as a JSON-RPC 2.0 Model Context Protocol (MCP
 }
 ```
 
-Passing the same `-state` file path to both the web server and the MCP server keeps browser actions and MCP tool calls synchronized in real time.
+Use a single Service owner for instruction execution. A standalone MCP process can own state, but running it alongside a web server writing the same file does not provide atomic cross-process claims. Use HTTP instruction clients against the web server for parallel workers (shared-file transactions are tracked separately in #37).
 
 ### CLI Subcommands and Flags
 
@@ -190,3 +190,49 @@ $ task build     # build the prdash binary
 $ task check     # run go fix, goimports, go vet (+ gokuigan), and go test -race
 $ task ui:docs   # regenerate screenshots in docs/screenshots/
 ```
+
+### Claim and report an individual instruction
+
+Run one dashboard server as the state owner. Every parallel worker must use that
+same server; do not launch an independent `-mcp`/state-file writer per consumer.
+Read queued IDs with `GET /api/sessions/<session>/instructions`, then:
+
+```sh
+prdash instruction claim -server http://127.0.0.1:8080 -session sess-1 -id smsg-123 -consumer worker-1
+# Save instruction.attempt, instruction.target_commit and claim_token from JSON.
+prdash instruction result -server http://127.0.0.1:8080 -session sess-1 -id smsg-123 -consumer worker-1 -attempt 1 -target-commit <claimed-commit> -claim-token <token> -outcome completed -status waiting_for_human -m "Tests passed"
+prdash instruction get -server http://127.0.0.1:8080 -session sess-1 -id smsg-123
+```
+
+A claim captures the instruction's assigned session, target commit, consumer and
+attempt. PR targets come from GitHub's head SHA (or an explicitly assigned local
+worktree); if unknown, supply `-target-commit` when claiming. Results refer to that
+input commit, even if execution produces a new commit. Only the latest instruction
+for the still-assigned session and matching current target can change PR status;
+stale results remain in history. Results never infer CI success or resolve conflicts.
+
+States are `queued`, `delivered`, `running`, `completed` and `failed`.
+`instruction ack` acknowledges only delivery of its specific ID. A delivered
+instruction can still be claimed. Legacy `report` and status changes do not ack
+instructions; legacy bulk ack is delivery-only and should not be used by parallel
+consumers. Claim tokens are returned only to claim callers and are omitted from
+dashboard snapshots; `PRDASH_CLAIM_TOKEN` can supply a token without a command-line
+argument.
+
+Distinct consumers must use distinct IDs. Persist the consumer ID and claimed ID
+before executing external effects. After a crash, use `get` and reissue `claim`
+with the same consumer ID to recover a running claim. A claim never expires
+automatically, because the original process may still be running. A terminal
+result is immutable; resending exactly the same result is idempotent. Execution
+itself is not an exactly-once transaction: inspect prior external effects after a
+crash and use `instruction_id + attempt` as an external idempotency key.
+
+Report `-outcome failed` to record a failed attempt. After checking that execution
+has stopped, use `instruction retry` with the failed claim's consumer, token and
+attempt to requeue it. The next claim receives a new token and attempt; old
+results are rejected and previous results remain in history.
+
+HTTP endpoints use `/api/sessions/{id}/instructions/{instruction}` with `GET` for
+inspection and `POST` suffixes `/ack`, `/claim`, `/result`, `/retry`. MCP exposes
+`get_instruction`, `ack_instruction`, `claim_instruction`,
+`report_instruction_result`, and `retry_instruction` on its owning Service.

@@ -117,13 +117,21 @@ func TestCLISubcommandsWorkflow(t *testing.T) {
 		t.Fatalf("expected instruction in wait output, got %q", stdout.String())
 	}
 
-	// 4. report completion from sess-1 marks instruction handled
+	// 4. Legacy report does not acknowledge uncorrelated instructions.
 	stdout.Reset()
 	if err := run(t.Context(), []string{"report", "--pr", "1", "--status", "waiting_for_human", "-m", "sample-cli-report", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("report error: %v", err)
 	}
 
-	// 5. wait times out with errWaitTimeout once instructions are handled
+	// 5. Explicitly acknowledge only the returned instructions.
+	stdout.Reset()
+	if err := run(t.Context(), []string{"instructions", "--session", "sess-1", "--ack", "--state", statePath}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "sample-cli-instruction") {
+		t.Fatal("legacy report swallowed pending instruction")
+	}
+	// 6. wait times out after delivery acknowledgment.
 	stdout.Reset()
 	err := run(t.Context(), []string{"wait", "--session", "sess-1", "--timeout", "150ms", "--state", statePath}, strings.NewReader(""), &stdout, &stderr)
 	if !errors.Is(err, errWaitTimeout) {

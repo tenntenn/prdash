@@ -51,6 +51,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return runStatusCmd(ctx, args[1:], stdout, stderr)
 		case "sync":
 			return runSyncCmd(ctx, args[1:], stdout, stderr)
+		case "instruction":
+			return runInstructionCmd(ctx, args[1:], stdout, stderr)
 		case "instructions":
 			return runInstructionsCmd(ctx, args[1:], stdout, stderr)
 		case "wait":
@@ -272,7 +274,14 @@ func runInstructionsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	svc := openCLIService(ctx, *repo, *dir, *stateFile)
 	pending := svc.PendingInstructions(*sessionID)
 	if *ack && len(pending) > 0 {
-		svc.AckInstructions(*sessionID, *prNum)
+		for _, msg := range pending {
+			if *prNum != 0 && msg.PRNumber != *prNum {
+				continue
+			}
+			if _, err := svc.AckInstruction(msg.To, msg.ID); err != nil {
+				return err
+			}
+		}
 	}
 	if *asJSON {
 		return writePrettyJSON(stdout, pending)
@@ -321,7 +330,11 @@ func runWaitCmd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		pending := svc.PendingInstructions(*sessionID)
 		if len(pending) > 0 {
 			if *ack {
-				svc.AckInstructions(*sessionID, 0)
+				for _, msg := range pending {
+					if _, err := svc.AckInstruction(msg.To, msg.ID); err != nil {
+						return err
+					}
+				}
 			}
 			if *asJSON {
 				return writePrettyJSON(stdout, pending)
