@@ -33,6 +33,9 @@ type Options struct {
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
+	syncMu            sync.Mutex
+	syncStatus        SyncStatus
+	lastSyncError     error
 	instructionClaims map[string]string
 	config            EffectiveConfig
 	configErr         error
@@ -125,6 +128,19 @@ func NewService(opts Options) *Service {
 // SyncRepository inspects the git repository at dir (or s.workDir / current directory),
 // discovers local git worktrees and open GitHub pull requests, and merges them into the service state.
 func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, error) {
+	if !s.syncMu.TryLock() {
+		return s.Snapshot(), errors.New("repository sync is already in progress")
+	}
+	defer s.syncMu.Unlock()
+	s.mu.RLock()
+	next := s.syncStatus.NextAllowedAt
+	lastErr := s.lastSyncError
+	s.mu.RUnlock()
+	if time.Now().Before(next) {
+		return s.Snapshot(), lastErr
+	}
+	attempted := time.Now().UTC()
+
 	s.mu.RLock()
 	if strings.TrimSpace(dir) == "" {
 		dir = s.workDir
@@ -134,6 +150,10 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 	}
 	configuredRepo := s.repo.FullName
 	models := s.modelConfig
+	tracked := make([]int, 0, len(s.prs))
+	for _, pr := range s.prs {
+		tracked = append(tracked, pr.Number)
+	}
 	s.mu.RUnlock()
 
 	detectedRepo := DetectRepositoryInfo(ctx, dir)
@@ -145,7 +165,7 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 	}
 
 	worktrees, wtErr := DiscoverWorktrees(ctx, detectedRepo.LocalPath)
-	prs, prErr := DiscoverPullRequests(ctx, detectedRepo.FullName, detectedRepo.LocalPath, detectedRepo.DefaultBranch, worktrees, models)
+	prs, prErr := discoverTrackedPullRequests(ctx, detectedRepo.FullName, detectedRepo.LocalPath, detectedRepo.DefaultBranch, worktrees, models, tracked)
 
 	s.mu.Lock()
 	s.reloadStateFileIfChangedLocked()
@@ -204,7 +224,7 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 		}
 	}
 
-	if prErr == nil {
+	if len(prs) > 0 {
 		wtByBranch := make(map[string]Worktree, len(s.worktrees))
 		for _, wt := range s.worktrees {
 			if wt.Branch != "" {
@@ -248,15 +268,20 @@ func (s *Service) SyncRepository(ctx context.Context, dir string) (Snapshot, err
 		}
 	}
 
+	s.syncStatus = SyncStatus{AttemptedAt: attempted, CompletedAt: time.Now().UTC(), NextAllowedAt: time.Now().UTC().Add(30 * time.Second), Truncated: errors.Is(prErr, ErrPRResultsTruncated)}
+	if wtErr != nil {
+		s.syncStatus.GitError = wtErr.Error()
+	}
+	if prErr != nil {
+		s.syncStatus.GitHubError = prErr.Error()
+	}
+	s.lastSyncError = errors.Join(wtErr, prErr)
 	s.controller.ActiveTask = fmt.Sprintf("Monitoring %d pull request(s) across %d worktree(s) in %s", len(s.prs), len(s.worktrees), s.repo.FullName)
 	snap := s.snapshotLocked()
 	s.mu.Unlock()
 
 	s.broadcast(snap)
-	if wtErr != nil && prErr != nil {
-		return snap, errors.Join(wtErr, prErr)
-	}
-	return snap, nil
+	return snap, errors.Join(wtErr, prErr)
 }
 
 func (s *Service) nextID(prefix string) string {
@@ -360,6 +385,7 @@ func (s *Service) snapshotLocked() Snapshot {
 	}
 
 	return Snapshot{
+		Sync:        s.syncStatus,
 		Config:      cloneEffectiveConfig(s.config),
 		ConfigError: s.configErrorStringLocked(), Repository: s.repo,
 		ModelConfig:       s.modelConfig,

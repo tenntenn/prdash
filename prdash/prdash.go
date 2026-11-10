@@ -178,6 +178,9 @@ type ThreadMessage struct {
 
 // PullRequest represents a pull request created and maintained by an agent session.
 type PullRequest struct {
+	GitHubState    string          `json:"github_state"` // open, merged, closed, unknown
+	IsDraft        bool            `json:"is_draft"`
+	Mergeability   string          `json:"mergeability"` // mergeable, conflicting, unknown
 	HeadSHA        string          `json:"head_sha,omitempty"`
 	ID             string          `json:"id"`
 	Number         int             `json:"number"`
@@ -239,8 +242,19 @@ type DashboardSummary struct {
 	ManagedWorktrees int `json:"managed_worktrees"`
 }
 
+// SyncStatus describes the most recent attempt by this service instance.
+type SyncStatus struct {
+	AttemptedAt   time.Time `json:"attempted_at"`
+	CompletedAt   time.Time `json:"completed_at"`
+	NextAllowedAt time.Time `json:"next_allowed_at"`
+	GitError      string    `json:"git_error,omitempty"`
+	GitHubError   string    `json:"github_error,omitempty"`
+	Truncated     bool      `json:"truncated"`
+}
+
 // Snapshot contains the complete state of the dashboard for a target repository.
 type Snapshot struct {
+	Sync              SyncStatus        `json:"sync"`
 	Config            EffectiveConfig   `json:"config"`
 	ConfigError       string            `json:"config_error,omitempty"`
 	Repository        RepositoryInfo    `json:"repository"`

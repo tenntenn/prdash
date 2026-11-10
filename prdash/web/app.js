@@ -209,6 +209,19 @@
   function render() {
     if (!state) return;
 
+    const syncButton = document.getElementById("sync-repo-btn");
+    let syncStatus = document.getElementById("repository-sync-status");
+    if (syncButton && !syncStatus) {
+      syncStatus = document.createElement("span");
+      syncStatus.id = "repository-sync-status";
+      syncStatus.setAttribute("role", "status");
+      syncButton.after(syncStatus);
+    }
+    if (syncStatus) {
+      const errors = [state.sync?.git_error, state.sync?.github_error].filter(Boolean);
+      syncStatus.textContent = errors.length ? `Sync incomplete: ${errors.join("; ")}` : "";
+    }
+
     // Header & Summary
     document.getElementById("repo-full-name").textContent = state.repository.full_name;
     document.getElementById("repo-branch").textContent = `default: ${state.repository.default_branch}`;
@@ -438,6 +451,8 @@
             </div>
             <div class="pr-summary-right" data-stop-summary-toggle="true">
               ${conflictBadge}
+              <span class="meta-pill">GitHub: ${escapeHTML(pr.github_state || "unknown")}${pr.is_draft ? " · Draft" : ""}</span>
+              ${(!pr.mergeability || pr.mergeability === "unknown") ? `<span class="meta-pill">Mergeability: unknown</span>` : ""}
               <span class="meta-pill ${ciClass}">CI: ${escapeHTML(pr.ci_status)}</span>
               <span class="meta-pill">${escapeHTML(sess ? sess.name : pr.session_id)} · ${escapeHTML(pr.worktree_id)}</span>
               <label class="auto-toggle" title="Toggle autonomous routine and review handling for this PR">
@@ -581,6 +596,9 @@
       e.target.textContent = "Syncing...";
       try {
         await apiPost("/api/sync", {});
+      } catch (err) {
+        showToast("Repository sync incomplete", err.message);
+        await refreshState();
       } finally {
         e.target.disabled = false;
         e.target.textContent = "Sync GitHub & Worktrees";
