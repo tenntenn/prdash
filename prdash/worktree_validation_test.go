@@ -91,6 +91,7 @@ func TestValidatePRWorktreeUsesLiveGit(t *testing.T) {
 			t.Cleanup(server.Close)
 			req := httptest.NewRequest(http.MethodPost, server.URL+"/api/prs/42/validate-worktree", bytes.NewReader(nil))
 			req.RemoteAddr = "127.0.0.1:12345"
+			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+acquireHTTPToken(t, server.URL))
 			handler.ServeHTTP(rec, req)
 			want := http.StatusOK
