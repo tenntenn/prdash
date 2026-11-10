@@ -2,7 +2,6 @@ package prdash_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -58,39 +57,17 @@ func TestSendPRMessage(t *testing.T) {
 		expectedStatus prdash.PRStatus
 		wantErr        bool
 	}{
-		{
-			name:           "auto-mode PR completes instruction and waits for human",
-			prNumber:       102,
-			text:           "Add test for invalid refresh token signature",
-			expectedStatus: prdash.StatusWaitingForHuman,
-			wantErr:        false,
-		},
-		{
-			name:           "manual-mode PR enters working state",
-			prNumber:       103,
-			text:           "Include actor IP in revocation audit event",
-			expectedStatus: prdash.StatusWorking,
-			wantErr:        false,
-		},
-		{
-			name:     "empty message returns error",
-			prNumber: 101,
-			text:     "   ",
-			wantErr:  true,
-		},
-		{
-			name:     "unknown PR returns error",
-			prNumber: 999,
-			text:     "Check status",
-			wantErr:  true,
-		},
+		{"auto-mode PR completes instruction and waits for human", 102, "sample-instruction-1", prdash.StatusWaitingForHuman, false},
+		{"manual-mode PR enters working state", 103, "sample-instruction-2", prdash.StatusWorking, false},
+		{"empty message returns error", 101, "   ", "", true},
+		{"unknown PR returns error", 999, "sample-instruction-3", "", true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
-			updated, err := svc.SendPRMessage(tc.prNumber, "Reviewer", tc.text)
+			updated, err := svc.SendPRMessage(tc.prNumber, "sample-author", tc.text)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -118,36 +95,10 @@ func TestRoutineActions(t *testing.T) {
 		wantCIStatus  string
 		wantErr       bool
 	}{
-		{
-			name:          "resolve conflicts clears conflict flag",
-			prNumber:      107,
-			action:        prdash.ActionResolveConflicts,
-			wantConflicts: false,
-			wantCIStatus:  "passing",
-			wantErr:       false,
-		},
-		{
-			name:          "fix CI transitions failing CI to passing",
-			prNumber:      109,
-			action:        prdash.ActionFixCI,
-			wantConflicts: false,
-			wantCIStatus:  "passing",
-			wantErr:       false,
-		},
-		{
-			name:          "rebase stack updates stacked chain",
-			prNumber:      102,
-			action:        prdash.ActionRebaseStack,
-			wantConflicts: false,
-			wantCIStatus:  "passing",
-			wantErr:       false,
-		},
-		{
-			name:     "invalid routine action fails",
-			prNumber: 101,
-			action:   prdash.RoutineAction("unknown_action"),
-			wantErr:  true,
-		},
+		{"resolve conflicts clears conflict flag", 107, prdash.ActionResolveConflicts, false, "passing", false},
+		{"fix CI transitions failing CI to passing", 109, prdash.ActionFixCI, false, "passing", false},
+		{"rebase stack updates stacked chain", 102, prdash.ActionRebaseStack, false, "passing", false},
+		{"invalid routine action fails", 101, prdash.RoutineAction("unknown_action"), false, "", true},
 	}
 
 	for _, tc := range cases {
@@ -188,36 +139,10 @@ func TestModelTierPresets(t *testing.T) {
 		expectedModel string
 		wantErr       bool
 	}{
-		{
-			name:          "pine tier selects high-capability model",
-			sessionID:     "sess-beta",
-			tier:          prdash.TierPine,
-			subagentTier:  prdash.TierBamboo,
-			expectedModel: "claude-opus-4-6",
-			wantErr:       false,
-		},
-		{
-			name:          "bamboo tier selects balanced model",
-			sessionID:     "sess-alpha",
-			tier:          prdash.TierBamboo,
-			subagentTier:  prdash.TierPlum,
-			expectedModel: "claude-sonnet-4-6",
-			wantErr:       false,
-		},
-		{
-			name:          "plum tier selects fast lightweight model",
-			sessionID:     "sess-gamma",
-			tier:          prdash.TierPlum,
-			subagentTier:  prdash.TierPlum,
-			expectedModel: "claude-haiku-4-5",
-			wantErr:       false,
-		},
-		{
-			name:      "invalid tier returns error",
-			sessionID: "sess-alpha",
-			tier:      prdash.ModelTier("invalid"),
-			wantErr:   true,
-		},
+		{"pine tier selects high-capability model", "sess-beta", prdash.TierPine, prdash.TierBamboo, "claude-opus-4-6", false},
+		{"bamboo tier selects balanced model", "sess-alpha", prdash.TierBamboo, prdash.TierPlum, "claude-sonnet-4-6", false},
+		{"plum tier selects fast lightweight model", "sess-gamma", prdash.TierPlum, prdash.TierPlum, "claude-haiku-4-5", false},
+		{"invalid tier returns error", "sess-alpha", prdash.ModelTier("invalid"), "", "", true},
 	}
 
 	for _, tc := range cases {
@@ -244,13 +169,12 @@ func TestModelTierPresets(t *testing.T) {
 func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
 
 	beforeNotifs := len(svc.Snapshot().Notifications)
 
-	// Post an sbnn comment on manual-mode PR #103, then address review
-	pr, err := svc.PostSBNNComment(ctx, 103, "internal/auth/audit.go", 27, "Include request correlation ID in audit payload")
+	pr, err := svc.PostSBNNComment(ctx, 103, "internal/auth/audit.go", 27, "sample-review-comment")
 	if err != nil {
 		t.Fatalf("PostSBNNComment failed: %v", err)
 	}
@@ -258,7 +182,7 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 		t.Fatalf("expected changes_requested, got %s", pr.ReviewStatus)
 	}
 
-	pr, err = svc.AddressReview(103, "Add correlation_id field to AuditEvent")
+	pr, err = svc.AddressReview(103, "sample-review-fix")
 	if err != nil {
 		t.Fatalf("AddressReview failed: %v", err)
 	}
@@ -266,8 +190,7 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 		t.Fatalf("expected approved & waiting_for_human, got %s / %s", pr.ReviewStatus, pr.Status)
 	}
 
-	// Report session completion on PR #105 (working -> waiting_for_human)
-	pr, err = svc.ReportSessionResult("sess-beta", 105, prdash.StatusWaitingForHuman, "Completed retention benchmarks")
+	pr, err = svc.ReportSessionResult("sess-beta", 105, prdash.StatusWaitingForHuman, "sample-session-report")
 	if err != nil {
 		t.Fatalf("ReportSessionResult failed: %v", err)
 	}
@@ -295,46 +218,18 @@ func TestHTTPHandler(t *testing.T) {
 		body       string
 		wantStatus int
 	}{
-		{
-			name:       "serve index html",
-			method:     http.MethodGet,
-			path:       "/",
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "get dashboard state",
-			method:     http.MethodGet,
-			path:       "/api/state",
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "send PR message",
-			method:     http.MethodPost,
-			path:       "/api/prs/102/messages",
-			body:       `{"author":"Human","text":"Verify token expiry edge case"}`,
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "post sbnn comment",
-			method:     http.MethodPost,
-			path:       "/api/prs/101/sbnn-comment",
-			body:       `{"file_path":"internal/auth/pkce.go","line":50,"body":"Check verifier length bounds"}`,
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "send controller instruction",
-			method:     http.MethodPost,
-			path:       "/api/controller/instruction",
-			body:       `{"text":"Prioritize the OAuth2 stack first"}`,
-			wantStatus: http.StatusOK,
-		},
+		{"serve index html", http.MethodGet, "/", "", http.StatusOK},
+		{"get dashboard state", http.MethodGet, "/api/state", "", http.StatusOK},
+		{"send PR message", http.MethodPost, "/api/prs/102/messages", `{"author":"sample-author","text":"sample-message"}`, http.StatusOK},
+		{"post sbnn comment", http.MethodPost, "/api/prs/101/sbnn-comment", `{"file_path":"internal/auth/pkce.go","line":50,"body":"sample-comment"}`, http.StatusOK},
+		{"send controller instruction", http.MethodPost, "/api/controller/instruction", `{"text":"sample-instruction"}`, http.StatusOK},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, err := http.NewRequest(tc.method, srv.URL+tc.path, strings.NewReader(tc.body))
+			req, err := http.NewRequestWithContext(t.Context(), tc.method, srv.URL+tc.path, strings.NewReader(tc.body))
 			if err != nil {
-				t.Fatalf("NewRequest: %v", err)
+				t.Fatalf("NewRequestWithContext: %v", err)
 			}
 			if tc.body != "" {
 				req.Header.Set("Content-Type", "application/json")
@@ -363,7 +258,7 @@ func TestMCPServer(t *testing.T) {
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
-	if err := prdash.RunMCP(context.Background(), svc, strings.NewReader(input), &out); err != nil {
+	if err := prdash.RunMCP(t.Context(), svc, strings.NewReader(input), &out); err != nil {
 		t.Fatalf("RunMCP failed: %v", err)
 	}
 
@@ -404,7 +299,7 @@ func TestStateFileSynchronization(t *testing.T) {
 		StateFile:  statePath,
 	})
 
-	if _, err := mcpSvc.ReportSessionResult("sess-delta", 109, prdash.StatusWaitingForHuman, "Fixed idempotency test race via MCP"); err != nil {
+	if _, err := mcpSvc.ReportSessionResult("sess-delta", 109, prdash.StatusWaitingForHuman, "sample-sync-report"); err != nil {
 		t.Fatalf("ReportSessionResult: %v", err)
 	}
 
@@ -420,30 +315,30 @@ func TestStateFileSynchronization(t *testing.T) {
 func TestUpsertWorktreeSessionAndPR(t *testing.T) {
 	t.Parallel()
 
-	svc := prdash.NewService(prdash.Options{Repository: "tenntenn/prdash"})
+	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
 
 	wt, err := svc.UpsertWorktree(prdash.Worktree{
-		ID:        "wt-dogfood",
-		Path:      "/workspace/repos/prdash",
-		Branch:    "feat/dynamic-registration",
+		ID:        "wt-sample",
+		Path:      "/workspace/repos/sample",
+		Branch:    "feat/sample-branch",
 		HeadSHA:   "a719dfd",
 		Clean:     true,
-		SessionID: "sess-dogfood",
+		SessionID: "sess-sample",
 	})
 	if err != nil {
 		t.Fatalf("UpsertWorktree: %v", err)
 	}
-	if wt.ID != "wt-dogfood" {
+	if wt.ID != "wt-sample" {
 		t.Fatalf("unexpected worktree id: %s", wt.ID)
 	}
 
 	sess, err := svc.UpsertSession(prdash.Session{
-		ID:                "sess-dogfood",
-		Name:              "Session Dogfood (Self-Host)",
-		WorktreeID:        "wt-dogfood",
+		ID:                "sess-sample",
+		Name:              "sample-session",
+		WorktreeID:        "wt-sample",
 		ModelTier:         prdash.TierPine,
 		SubagentModelTier: prdash.TierBamboo,
-		ActiveTask:        "Implementing dynamic entity registration for dogfooding",
+		ActiveTask:        "sample-task",
 	})
 	if err != nil {
 		t.Fatalf("UpsertSession: %v", err)
@@ -454,12 +349,12 @@ func TestUpsertWorktreeSessionAndPR(t *testing.T) {
 
 	pr, err := svc.UpsertPR(prdash.PullRequest{
 		Number:      10,
-		Title:       "Support registering and updating worktrees, sessions, and pull requests",
-		Description: "Adds UpsertWorktree, UpsertSession, and UpsertPR across Service, HTTP API, and MCP.",
-		Branch:      "feat/dynamic-registration",
+		Title:       "sample-pr-title",
+		Description: "sample-pr-description",
+		Branch:      "feat/sample-branch",
 		BaseBranch:  "main",
-		SessionID:   "sess-dogfood",
-		WorktreeID:  "wt-dogfood",
+		SessionID:   "sess-sample",
+		WorktreeID:  "wt-sample",
 		Status:      prdash.StatusWaitingForHuman,
 		AutoMode:    true,
 		ModelTier:   prdash.TierPine,
