@@ -20,20 +20,67 @@ func TestWriteSyntheticStateForDocs(t *testing.T) {
 	}
 	svc := prdash.NewService(prdash.Options{
 		Repository: "acme/nebula-api",
+		WorkDir:    "/workspace/repos/nebula-api",
 		StateFile:  path,
 		Reviewer:   prdash.NewStubSBNNClient(),
 	})
-	svc.SeedSynthetic()
+	populateTestFixtures(t, svc)
 }
 
 func newSeededService(t *testing.T) *prdash.Service {
 	t.Helper()
 	svc := prdash.NewService(prdash.Options{
 		Repository: "acme/nebula-api",
+		WorkDir:    "/workspace/repos/nebula-api",
 		Reviewer:   prdash.NewStubSBNNClient(),
 	})
-	svc.SeedSynthetic()
+	populateTestFixtures(t, svc)
 	return svc
+}
+
+func populateTestFixtures(t *testing.T, svc *prdash.Service) {
+	t.Helper()
+
+	worktrees := []prdash.Worktree{
+		{ID: "wt-alpha", Path: "/workspace/repos/nebula-api-wt-alpha", Branch: "feat/oauth-audit", HeadSHA: "9c3f1a2", Clean: true, SessionID: "sess-alpha"},
+		{ID: "wt-beta", Path: "/workspace/repos/nebula-api-wt-beta", Branch: "feat/storage-retention", HeadSHA: "4b8e7d1", Clean: false, SessionID: "sess-beta"},
+		{ID: "wt-gamma", Path: "/workspace/repos/nebula-api-wt-gamma", Branch: "fix/webhook-retry-jitter", HeadSHA: "1e5a9c0", Clean: true, SessionID: "sess-gamma"},
+		{ID: "wt-delta", Path: "/workspace/repos/nebula-api-wt-delta", Branch: "chore/openapi-client-gen", HeadSHA: "7d2b4f8", Clean: false, SessionID: "sess-delta"},
+	}
+	for _, wt := range worktrees {
+		if _, err := svc.UpsertWorktree(wt); err != nil {
+			t.Fatalf("UpsertWorktree(%s): %v", wt.ID, err)
+		}
+	}
+
+	sessions := []prdash.Session{
+		{ID: "sess-alpha", Name: "OAuth Stack Builder", WorktreeID: "wt-alpha", Status: "working", ModelTier: prdash.TierPine, SubagentModelTier: prdash.TierBamboo, ActiveTask: "Addressing review on PR #102"},
+		{ID: "sess-beta", Name: "Storage Engine Worker", WorktreeID: "wt-beta", Status: "working", ModelTier: prdash.TierBamboo, SubagentModelTier: prdash.TierPlum, ActiveTask: "Running benchmarks on PR #105"},
+		{ID: "sess-gamma", Name: "Reliability & Webhook Worker", WorktreeID: "wt-gamma", Status: "idle", ModelTier: prdash.TierBamboo, SubagentModelTier: prdash.TierPlum, ActiveTask: "Awaiting human review on PR #107"},
+		{ID: "sess-delta", Name: "SDK & Docs Maintainer", WorktreeID: "wt-delta", Status: "working", ModelTier: prdash.TierPlum, SubagentModelTier: prdash.TierPlum, ActiveTask: "Fixing CI on PR #109"},
+	}
+	for _, sess := range sessions {
+		if _, err := svc.UpsertSession(sess); err != nil {
+			t.Fatalf("UpsertSession(%s): %v", sess.ID, err)
+		}
+	}
+
+	prs := []prdash.PullRequest{
+		{Number: 101, Title: "feat(auth): introduce PKCE verifier and token store schema", Description: "Root PR of the OAuth2 stack", Branch: "feat/oauth-pkce", BaseBranch: "main", SessionID: "sess-alpha", WorktreeID: "wt-alpha", StackID: "stack-oauth", StackOrder: 1, StackSize: 3, Status: prdash.StatusWaitingForHuman, AutoMode: true, ModelTier: prdash.TierPine, CIStatus: "passing", ReviewStatus: "approved", Additions: 342, Deletions: 28, ChangedFiles: 7},
+		{Number: 102, Title: "feat(auth): add token exchange HTTP handler and middleware", Description: "Middle PR of the OAuth2 stack", Branch: "feat/oauth-handler", BaseBranch: "feat/oauth-pkce", SessionID: "sess-alpha", WorktreeID: "wt-alpha", StackID: "stack-oauth", StackOrder: 2, StackSize: 3, ParentPRNumber: 101, Status: prdash.StatusWorking, AutoMode: true, ModelTier: prdash.TierPine, CIStatus: "running", ReviewStatus: "changes_requested", Additions: 418, Deletions: 54, ChangedFiles: 9},
+		{Number: 103, Title: "feat(auth): structured security audit log events for OAuth flows", Description: "Top PR of the OAuth2 stack", Branch: "feat/oauth-audit", BaseBranch: "feat/oauth-handler", SessionID: "sess-alpha", WorktreeID: "wt-alpha", StackID: "stack-oauth", StackOrder: 3, StackSize: 3, ParentPRNumber: 102, Status: prdash.StatusWaitingForHuman, AutoMode: false, ModelTier: prdash.TierPine, CIStatus: "passing", ReviewStatus: "review_pending", Additions: 215, Deletions: 12, ChangedFiles: 5},
+		{Number: 104, Title: "refactor(storage): keyset pagination cursor for event log queries", Description: "Base of the 2-PR storage stack", Branch: "feat/storage-cursor", BaseBranch: "main", SessionID: "sess-beta", WorktreeID: "wt-beta", StackID: "stack-storage", StackOrder: 1, StackSize: 2, Status: prdash.StatusWaitingForHuman, AutoMode: true, ModelTier: prdash.TierBamboo, CIStatus: "passing", ReviewStatus: "approved", Additions: 189, Deletions: 94, ChangedFiles: 6},
+		{Number: 105, Title: "feat(storage): automated snapshot retention compactor", Description: "Builds on PR #104", Branch: "feat/storage-retention", BaseBranch: "feat/storage-cursor", SessionID: "sess-beta", WorktreeID: "wt-beta", StackID: "stack-storage", StackOrder: 2, StackSize: 2, ParentPRNumber: 104, Status: prdash.StatusWorking, AutoMode: true, ModelTier: prdash.TierBamboo, CIStatus: "running", ReviewStatus: "review_pending", Additions: 276, Deletions: 31, ChangedFiles: 4},
+		{Number: 106, Title: "fix(webhook): exponential backoff with full jitter on 5xx responses", Description: "Standalone reliability fix", Branch: "fix/webhook-retry-jitter", BaseBranch: "main", SessionID: "sess-gamma", WorktreeID: "wt-gamma", Status: prdash.StatusWaitingForHuman, AutoMode: false, ModelTier: prdash.TierBamboo, CIStatus: "passing", ReviewStatus: "review_pending", Additions: 94, Deletions: 37, ChangedFiles: 3},
+		{Number: 107, Title: "feat(webhook): dead-letter replay endpoint for failed deliveries", Description: "Has a merge conflict with main", Branch: "feat/webhook-dlq-replay", BaseBranch: "main", SessionID: "sess-gamma", WorktreeID: "wt-gamma", Status: prdash.StatusWaitingForHuman, AutoMode: false, ModelTier: prdash.TierBamboo, CIStatus: "passing", HasConflicts: true, ReviewStatus: "changes_requested", Additions: 310, Deletions: 45, ChangedFiles: 8},
+		{Number: 108, Title: "docs(openapi): regenerate v2 OpenAPI spec and Go client types", Description: "Routine specification sync", Branch: "chore/openapi-client-gen", BaseBranch: "main", SessionID: "sess-delta", WorktreeID: "wt-delta", Status: prdash.StatusWaitingForHuman, AutoMode: true, ModelTier: prdash.TierPlum, CIStatus: "passing", ReviewStatus: "approved", Additions: 612, Deletions: 580, ChangedFiles: 14},
+		{Number: 109, Title: "test(e2e): stabilize rate-limiter clock skew assertion", Description: "Session is fixing a flaky CI failure", Branch: "fix/e2e-ratelimit-clock", BaseBranch: "main", SessionID: "sess-delta", WorktreeID: "wt-delta", Status: prdash.StatusWorking, AutoMode: true, ModelTier: prdash.TierPlum, CIStatus: "failing", ReviewStatus: "review_pending", Additions: 48, Deletions: 19, ChangedFiles: 2},
+	}
+	for _, pr := range prs {
+		if _, err := svc.UpsertPR(pr); err != nil {
+			t.Fatalf("UpsertPR(#%d): %v", pr.Number, err)
+		}
+	}
 }
 
 func TestEmptyDefaultService(t *testing.T) {
@@ -215,6 +262,9 @@ func TestRoutineActionsQueueWorkUntilSessionReportsResult(t *testing.T) {
 			if pr.Status != prdash.StatusWorking {
 				t.Fatalf("expected status %s while session executes routine action, got %s", prdash.StatusWorking, pr.Status)
 			}
+			if len(svc.PendingInstructions(pr.SessionID)) == 0 {
+				t.Fatalf("expected pending instruction for %s", pr.SessionID)
+			}
 
 			completed, err := svc.ReportSessionResult(pr.SessionID, tc.prNumber, prdash.StatusWaitingForHuman, "sample-routine-complete")
 			if err != nil {
@@ -222,6 +272,9 @@ func TestRoutineActionsQueueWorkUntilSessionReportsResult(t *testing.T) {
 			}
 			if completed.Status != prdash.StatusWaitingForHuman || completed.HasConflicts || completed.CIStatus != "passing" {
 				t.Fatalf("unexpected PR state after session report: %+v", completed)
+			}
+			if rem := svc.PendingInstructions(pr.SessionID); len(rem) != 0 {
+				t.Fatalf("expected pending instructions to be marked handled after ReportSessionResult, got %+v", rem)
 			}
 		})
 	}
@@ -362,6 +415,7 @@ func TestHTTPHandler(t *testing.T) {
 		{"send PR message", http.MethodPost, "/api/prs/102/messages", `{"author":"sample-author","text":"sample-message"}`, http.StatusOK},
 		{"post sbnn comment", http.MethodPost, "/api/prs/101/sbnn-comment", `{"file_path":"internal/auth/pkce.go","line":50,"body":"sample-comment"}`, http.StatusOK},
 		{"send controller instruction", http.MethodPost, "/api/controller/instruction", `{"text":"sample-instruction"}`, http.StatusOK},
+		{"ack controller instructions", http.MethodPost, "/api/sessions/controller/ack", `{}`, http.StatusOK},
 	}
 
 	for _, tc := range cases {
@@ -435,7 +489,7 @@ func TestStateFileSynchronization(t *testing.T) {
 		StateFile:  statePath,
 		Reviewer:   prdash.NewStubSBNNClient(),
 	})
-	webSvc.SeedSynthetic()
+	populateTestFixtures(t, webSvc)
 	mcpSvc := prdash.NewService(prdash.Options{
 		Repository: "acme/nebula-api",
 		StateFile:  statePath,

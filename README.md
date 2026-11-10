@@ -73,14 +73,21 @@ Because the skill itself documents this update procedure, you can also simply as
 
 ## Usage
 
-### Starting the Web Dashboard
+### Starting the Web Dashboard & Using the CLI
 
 ```console
-$ prdash                                         # auto-detects current git repo, worktrees, and open GitHub PRs
-$ prdash -repo owner/name -state /tmp/state.json # explicit repository and shared state file
+$ prdash                               # auto-detects git repo, worktrees, and open GitHub PRs
+$ prdash status                        # show repository summary (worktrees, sessions, PRs)
+$ prdash sync                          # refresh git worktrees and open GitHub PRs
+$ prdash wait --session controller     # block until a human instruction arrives
+$ prdash instructions --session sess-1 # list unhandled instructions for a session
+$ prdash report --pr 42 -m "Fixed CI"  # report completion and transition PR to waiting_for_human
+$ prdash send --pr 42 -m "Run tests"   # queue an instruction for a PR session
 ```
 
-On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header or `sync_repository` is called via MCP), `prdash` automatically:
+Repository state is persisted automatically in `$XDG_STATE_HOME/prdash/state-<owner>__<name>.json` (or `~/.local/state/prdash/...`), so the Web UI, CLI subcommands, and MCP server (`prdash -mcp`) share state out of the box without needing manual `-state` flags.
+
+On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header, `prdash sync` is run, or `sync_repository` is called via MCP), `prdash` automatically:
 1. Detects the repository (`owner/name`, default branch, local root) via `git`.
 2. Discovers local git worktrees via `git worktree list --porcelain` and checks working tree status.
 3. Fetches open pull requests from GitHub via `gh pr list`, binds them to matching worktrees by branch, and infers stacked PR chains (`Stack 1/N → 2/N → ...`) from `baseRefName` and `headRefName`.

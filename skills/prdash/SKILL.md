@@ -6,13 +6,13 @@ license: MIT
 
 # Coordinating pull requests and agent sessions with prdash
 
-`prdash` is a repository-scoped command-center web dashboard and MCP server that links **Git Worktrees**, **Agent Sessions**, and **Pull Requests** (including stacked PR chains).
+`prdash` is a repository-scoped command-center web dashboard, CLI, and MCP server that links **Git Worktrees**, **Agent Sessions**, and **Pull Requests** (including stacked PR chains).
 
 Nothing in this skill is specific to a single agent vendor: any coding agent that can read a Markdown instruction file, run shell commands, or connect to a Model Context Protocol (MCP) server can use it.
 
 ## Prerequisites
 
-`prdash` must be on `PATH`. Check with `prdash --version`; if it is missing, install the binary with `go install`:
+`prdash` must be on `PATH`. Check with `prdash -version`; if it is missing, install the binary with `go install`:
 
 ```console
 go install github.com/tenntenn/prdash@latest
@@ -50,34 +50,70 @@ prdash skill --list   # list embedded skill files
 
 ---
 
-## Controller Session Role
+## Workflow
 
-When an agent session loads this skill and starts `prdash`, that agent session acts as the **Dashboard Controller Session** (`sess-controller`):
+State for each repository is automatically persisted in `$XDG_STATE_HOME/prdash/state-<owner>__<repo>.json` (or `~/.local/state/prdash/...`), so the Web UI, CLI subcommands, and MCP server share state automatically without needing manual state file flags.
 
-1. **Human → Controller**: The human operator can send orchestration instructions from the **Dashboard Session** panel in the browser UI.
-2. **Controller → Worker Sessions**: The controller session coordinates worker sessions bound to individual git worktrees, dispatching PR-level instructions, routine actions, and `sbnn` review tasks.
-3. **Worker Sessions → Controller & Human**: Worker sessions report progress and completion back to the dashboard. Whenever a PR transitions from `working` (**Agent Working**) to `waiting_for_human` (**Waiting for Human**), `prdash` emits a notification to alert the human operator.
+### 1. Start the dashboard and synchronize the repository
 
-## Starting the Dashboard
-
-Start `prdash` for the target repository, passing `-state` so the Web UI and MCP / CLI invocations share state:
+Run `prdash` in the repository directory:
 
 ```console
-prdash -repo owner/name -state /tmp/prdash-state.json
+prdash
 ```
 
-- `prdash` automatically binds an available local TCP port and prints the URL on stdout:
+- `prdash` automatically detects the repository (`owner/name`, default branch, local root), discovers local git worktrees (`git worktree list --porcelain`), fetches open GitHub PRs (`gh pr list`), infers stacked PR chains (`Stack 1/N → 2/N → ...`), and prints the listening URL:
   ```text
   prdash listening on http://127.0.0.1:<port> (repository: owner/name)
   ```
 - Hand the printed URL to the human operator so they can open and operate the dashboard in their browser.
+- To refresh worktrees and open GitHub PRs at any time from the command line:
+  ```console
+  prdash sync
+  prdash status
+  ```
+
+### 2. Wait for human instructions (Controller or Worker Session)
+
+Never poll in a tight shell loop. Use `prdash wait` to block until the human sends an instruction or triggers a routine operation in the browser UI:
+
+```console
+prdash wait --session controller --timeout 30m
+prdash wait --session <worker-session-id> --timeout 30m
+```
+
+- If unhandled instructions are already queued, `prdash wait` prints them and exits `0` immediately.
+- If `--timeout` expires before an instruction arrives, `prdash wait` exits with status `2`.
+- To inspect or acknowledge pending instructions without blocking:
+  ```console
+  prdash instructions --session <session-id>
+  prdash instructions --session <session-id> --ack
+  ```
+
+### 3. Act on instructions and report results back
+
+When a worker session finishes addressing review comments, fixing CI, or resolving conflicts on a PR, report the result back so `prdash` marks the queued instructions as handled, transitions the PR from `working` (**Agent Working**) to `waiting_for_human` (**Waiting for Human**), and alerts the human operator:
+
+```console
+prdash report --pr <number> --status waiting_for_human -m "Resolved conflicts and verified test suite passes."
+```
+
+To queue an instruction from the CLI to a PR, worker session, or the controller session:
+
+```console
+prdash send --pr <number> -m "Rebase onto base branch and run tests"
+prdash send --session <session-id> -m "Run linter across package"
+prdash send --controller -m "Rebalance model tiers across open stacks"
+```
+
+---
 
 ## Operating via MCP Server
 
-`prdash` also runs as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio, sharing the same `prdash.Service` core:
+`prdash` also runs as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio, sharing the exact same `prdash.Service` core and repository state file:
 
 ```console
-prdash -mcp -repo owner/name -state /tmp/prdash-state.json
+prdash -mcp
 ```
 
 ### Available MCP Tools
@@ -86,46 +122,26 @@ prdash -mcp -repo owner/name -state /tmp/prdash-state.json
 | :--- | :--- |
 | `get_dashboard` | Retrieve the full repository snapshot (PRs, stacks, sessions, worktrees, model presets, notifications). |
 | `sync_repository` | Discover local git worktrees (`git worktree list`) and open GitHub pull requests (`gh pr list`) and synchronize them into the dashboard. |
-| `list_pending_instructions` | List queued instructions for a worker session or the controller session (`session_id`). |
+| `list_pending_instructions` | List unhandled instructions queued for a worker session or the controller session (`session_id`). |
+| `ack_instructions` | Mark queued instructions for `session_id` (and optional `pr_number`) as handled. |
 | `list_prs` | List pull requests filtered by `status` (`waiting_for_human` or `working`) or `stack_id`. |
 | `get_pr` | Inspect a single PR and its full session conversation thread. |
 | `upsert_worktree` | Register or update a git worktree bound to an agent session. |
 | `upsert_session` | Register or update a worker session bound to a git worktree. |
 | `upsert_pr` | Register or update a pull request managed by an agent session. |
 | `send_pr_message` | Send an instruction to the session responsible for a specific PR. |
-| `post_sbnn_comment` | Post a code review comment through the `sbnn` integration boundary. |
-| `request_review` | Run an automated review on a PR via `sbnn`. |
+| `post_sbnn_comment` | Post a code review comment through the `sbnn` CLI integration. |
+| `request_review` | Send the PR diff to `sbnn` and read open review comments (`sbnn comments --format json`). |
 | `address_review` | Instruct the assigned session to address open review feedback on a PR. |
 | `run_routine_action` | Trigger a preset operation: `resolve_conflicts`, `rebase_stack`, `fix_ci`, `sync_branch`, or `update_summary`. |
 | `set_auto_mode` | Toggle per-PR Auto-Mode (`true` = autonomous handling, `false` = manual mode). |
 | `set_pr_status` | Transition a PR between `waiting_for_human` and `working`. |
 | `send_session_instruction` | Send a direct instruction to a worker session outside any specific PR thread. |
 | `send_controller_instruction` | Send an orchestration instruction to the dashboard controller session. |
-| `report_session_result` | Report status and results from a worker session back to the dashboard. |
+| `report_session_result` | Report status and results from a worker session back to the dashboard and mark instructions handled. |
 | `set_model_tier` | Set the 3-tier model preset (`pine`, `bamboo`, `plum`) for a session, subagent, or PR. |
 | `configure_model_presets` | Map `pine`, `bamboo`, and `plum` presets to concrete model identifiers. |
 | `mark_notification_read` | Mark a notification ID or `"all"` notifications as read. |
-
-## Operating via HTTP REST API
-
-When the web dashboard is running at `http://127.0.0.1:<port>`, any agent can inspect and control it over HTTP:
-
-- `GET /api/state` — Fetch full `Snapshot` JSON (including `controller_session.messages` to read instructions entered by the human in the UI).
-- `POST /api/worktrees` — Register or update a git worktree.
-- `POST /api/sessions` — Register or update a worker session.
-- `POST /api/prs` — Register or update a pull request.
-- `POST /api/prs/{number}/messages` — `{"author": "Controller Agent", "text": "..."}`
-- `POST /api/prs/{number}/sbnn-comment` — `{"file_path": "pkg/foo.go", "line": 42, "body": "..."}`
-- `POST /api/prs/{number}/request-review` — `{"focus": "concurrency"}`
-- `POST /api/prs/{number}/address-review` — `{"instruction": "..."}`
-- `POST /api/prs/{number}/routine` — `{"action": "resolve_conflicts"}`
-- `POST /api/prs/{number}/auto-mode` — `{"enabled": true}`
-- `POST /api/prs/{number}/status` — `{"status": "waiting_for_human", "summary": "..."}`
-- `POST /api/prs/{number}/model-tier` — `{"tier": "pine"}`
-- `POST /api/sessions/{id}/instruction` — `{"text": "..."}`
-- `POST /api/sessions/{id}/report` — `{"pr_number": 102, "status": "waiting_for_human", "report": "..."}`
-- `POST /api/controller/instruction` — `{"text": "..."}`
-- `POST /api/models` — `{"pine": "...", "bamboo": "...", "plum": "..."}`
 
 ## Model Tier Presets (Pine / Bamboo / Plum)
 

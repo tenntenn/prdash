@@ -186,6 +186,14 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		_ = json.Unmarshal(rawArgs, &args)
 		return svc.PendingInstructions(args.SessionID), nil
 
+	case "ack_instructions":
+		var args struct {
+			SessionID string `json:"session_id"`
+			PRNumber  int    `json:"pr_number"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		return map[string]any{"acked": svc.AckInstructions(args.SessionID, args.PRNumber)}, nil
+
 	case "list_prs":
 		var args struct {
 			Status  string `json:"status"`
@@ -394,6 +402,17 @@ func mcpToolsList() []mcpTool {
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{"type": "string", "description": "Optional session ID (or 'controller')"},
+				},
+			},
+		},
+		{
+			Name:        "ack_instructions",
+			Description: "Mark queued instructions for a session (or 'controller') as handled.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{"type": "string", "description": "Session ID (or 'controller')"},
+					"pr_number":  map[string]any{"type": "integer", "description": "Optional pull request number filter"},
 				},
 			},
 		},
