@@ -3,6 +3,7 @@
   let activeFilter = "all";
   let activeSessionFilter = "";
   let desktopAlertsEnabled = false;
+  const drafts = new Map();
   const openPRs = new Set();
   const openSessionLogs = new Set();
   const seenNotifications = new Set();
@@ -18,9 +19,110 @@
     if (!resp.ok) {
       throw new Error(data.error || `Request failed: ${resp.status}`);
     }
-    await refreshState();
+    try {
+      await refreshState();
+    } catch (_) {
+      showToast("State refresh failed", "Your change was accepted. The dashboard will reconnect.");
+    }
     return data;
   }
+
+  function rememberDraft(form) {
+    const key = form.dataset.draftKey;
+    const draft = drafts.get(key) || { values: {}, revision: 0, pending: false, error: "" };
+    for (const input of form.querySelectorAll("input[name]")) {
+      if (draft.values[input.name] !== input.value) {
+        draft.values[input.name] = input.value;
+        draft.revision++;
+      }
+    }
+    drafts.set(key, draft);
+    return draft;
+  }
+
+  function restoreDraft(form) {
+    const draft = drafts.get(form.dataset.draftKey);
+    if (!draft) return;
+    for (const input of form.querySelectorAll("input[name]")) {
+      if (Object.hasOwn(draft.values, input.name)) input.value = draft.values[input.name];
+    }
+    form.setAttribute("aria-busy", String(draft.pending));
+    form.querySelector("button[type='submit']").disabled = draft.pending;
+    let error = form.querySelector("[data-draft-error]");
+    if (!error && draft.error) {
+      error = document.createElement("div");
+      error.dataset.draftError = "";
+      error.className = "draft-error";
+      error.setAttribute("role", "alert");
+      form.appendChild(error);
+    }
+    if (error) {
+      error.textContent = draft.error;
+      error.hidden = !draft.error;
+    }
+  }
+
+  function currentDraftForm(key) {
+    return Array.from(document.querySelectorAll("form[data-draft-key]"))
+      .find((form) => form.dataset.draftKey === key);
+  }
+
+  function renderWithDrafts(root, update) {
+    for (const form of root.querySelectorAll("form[data-draft-key]")) rememberDraft(form);
+    const input = document.activeElement;
+    const form = input?.closest("form[data-draft-key]");
+    const editing = form && root.contains(input) && input.matches("input[name]") ? {
+      key: form.dataset.draftKey,
+      name: input.name,
+      start: input.selectionStart,
+      end: input.selectionEnd,
+      direction: input.selectionDirection,
+      scrollLeft: input.scrollLeft,
+    } : null;
+    update();
+    for (const form of root.querySelectorAll("form[data-draft-key]")) restoreDraft(form);
+    if (editing) {
+      const restored = currentDraftForm(editing.key)?.elements.namedItem(editing.name);
+      if (restored) {
+        restored.focus({ preventScroll: true });
+        if (editing.start !== null) {
+          restored.setSelectionRange(editing.start, editing.end, editing.direction);
+        }
+        restored.scrollLeft = editing.scrollLeft;
+      }
+    }
+  }
+
+  async function submitDraft(form, path, payload) {
+    const key = form.dataset.draftKey;
+    const draft = rememberDraft(form);
+    if (draft.pending) return;
+    const submittedRevision = draft.revision;
+    draft.pending = true;
+    draft.error = "";
+    restoreDraft(form);
+    try {
+      await apiPost(path, payload);
+      const current = currentDraftForm(key);
+      if (current) rememberDraft(current);
+      // A response may arrive after an SSE render, a filter change, or more typing.
+      if (draft.revision === submittedRevision) {
+        for (const name of Object.keys(draft.values)) draft.values[name] = "";
+        draft.revision++;
+      }
+    } catch (err) {
+      draft.error = err.message || "Could not send. Your draft has been kept.";
+    } finally {
+      draft.pending = false;
+      const current = currentDraftForm(key);
+      if (current) restoreDraft(current);
+    }
+  }
+
+  document.addEventListener("input", (event) => {
+    const form = event.target.closest("form[data-draft-key]");
+    if (form) rememberDraft(form);
+  });
 
   async function refreshState() {
     const resp = await fetch("/api/state");
@@ -202,7 +304,7 @@
     }
     const container = document.getElementById("worker-sessions-list");
     const sessions = state.sessions || [];
-    container.innerHTML = sessions
+    const content = sessions
       .map((s) => {
         const wt = findWorktree(s.worktree_id);
         const logOpen = openSessionLogs.has(s.id);
@@ -231,7 +333,7 @@
           <div class="resolved-model-hint">
             Model: ${escapeHTML(s.resolved_model)} (Sub: ${escapeHTML(s.resolved_subagent_model)})
           </div>
-          <form class="instruction-form" data-session-form="${escapeHTML(s.id)}">
+          <form class="instruction-form" data-session-form="${escapeHTML(s.id)}" data-draft-key="session:${escapeHTML(s.id)}">
             <input type="text" name="text" placeholder="Direct instruction to ${escapeHTML(s.id)}..." required>
             <button type="submit" class="btn btn-secondary btn-sm">Send</button>
           </form>
@@ -253,6 +355,7 @@
         </div>`;
       })
       .join("");
+    renderWithDrafts(container, () => { container.innerHTML = content; });
   }
 
   function prMatchesFilter(pr) {
@@ -300,9 +403,11 @@
       }
     }
 
-    listEl.innerHTML = htmlParts.length
-      ? htmlParts.join("")
-      : `<div class="panel">No pull requests match the selected filter.</div>`;
+    renderWithDrafts(listEl, () => {
+      listEl.innerHTML = htmlParts.length
+        ? htmlParts.join("")
+        : `<div class="panel">No pull requests match the selected filter.</div>`;
+    });
   }
 
   function renderPRCard(pr) {
@@ -411,7 +516,7 @@
 
               <div class="action-box">
                 <h4 class="action-box-title">Send PR Comment via sbnn</h4>
-                <form class="sbnn-form" data-sbnn-form="${pr.number}">
+                <form class="sbnn-form" data-sbnn-form="${pr.number}" data-draft-key="comment:${pr.number}">
                   <input type="text" name="file_path" placeholder="File (optional)">
                   <input type="number" name="line" placeholder="Line" min="1">
                   <input type="text" name="body" placeholder="Review comment via sbnn..." required>
@@ -436,7 +541,7 @@
                   )
                   .join("")}
               </div>
-              <form class="instruction-form" data-pr-msg-form="${pr.number}">
+              <form class="instruction-form" data-pr-msg-form="${pr.number}" data-draft-key="pr:${pr.number}">
                 <input
                   type="text"
                   name="text"
@@ -637,8 +742,7 @@
       const input = document.getElementById("controller-input");
       const text = input.value.trim();
       if (!text) return;
-      input.value = "";
-      await apiPost("/api/controller/instruction", { text });
+      await submitDraft(e.target, "/api/controller/instruction", { text });
       return;
     }
 
@@ -658,9 +762,8 @@
       const input = e.target.querySelector("input[name='text']");
       const text = input.value.trim();
       if (!text) return;
-      input.value = "";
       openPRs.add(prNum);
-      await apiPost(`/api/prs/${prNum}/messages`, { author: "Human Operator", text });
+      await submitDraft(e.target, `/api/prs/${prNum}/messages`, { author: "Human Operator", text });
       return;
     }
 
@@ -672,9 +775,8 @@
       const bodyInput = e.target.querySelector("input[name='body']");
       const body = bodyInput.value.trim();
       if (!body) return;
-      bodyInput.value = "";
       openPRs.add(prNum);
-      await apiPost(`/api/prs/${prNum}/sbnn-comment`, {
+      await submitDraft(e.target, `/api/prs/${prNum}/sbnn-comment`, {
         file_path: filePath,
         line: lineVal,
         body,
@@ -688,9 +790,8 @@
       const input = e.target.querySelector("input[name='text']");
       const text = input.value.trim();
       if (!text) return;
-      input.value = "";
       openSessionLogs.add(sessID);
-      await apiPost(`/api/sessions/${encodeURIComponent(sessID)}/instruction`, { text });
+      await submitDraft(e.target, `/api/sessions/${encodeURIComponent(sessID)}/instruction`, { text });
       return;
     }
   });
