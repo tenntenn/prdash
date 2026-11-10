@@ -26,7 +26,13 @@ func (t *commandTarget) flags(fs *flag.FlagSet) {
 }
 
 func (t commandTarget) open(ctx context.Context) (*prdash.Service, error) {
-	svc := openCLIService(ctx, t.repo, t.dir, t.state)
+	svc, err := openCLIService(ctx, t.repo, t.dir, t.state)
+	if err != nil {
+		return nil, err
+	}
+	if err := svc.StateError(); err != nil {
+		return nil, err
+	}
 	if err := svc.ConfigLoadError(); err != nil {
 		return nil, err
 	}

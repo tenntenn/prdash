@@ -52,7 +52,7 @@ prdash skill --list   # list embedded skill files
 
 ## Workflow
 
-State for each repository is automatically persisted in `$XDG_STATE_HOME/prdash/state-<owner>__<repo>.json` (or `~/.local/state/prdash/...`), so sequential invocations can reuse state. For parallel execution, use one server as the state owner and connect workers through the instruction HTTP API. Independent processes writing the same file are not transactionally coordinated (#37).
+State for each repository is automatically persisted in `$XDG_STATE_HOME/prdash/state-<owner>__<repo>.json` (or `~/.local/state/prdash/...`), so the dashboard, CLI and MCP can share state. Mutations reload and commit under a cross-process lock. Use the same canonical state path and current prdash version for every writer; HTTP instruction clients can connect to the running dashboard.
 
 ### 1. Start the dashboard and synchronize the repository
 
@@ -114,8 +114,8 @@ prdash wait --session <worker-session-id> --timeout 30m
 
 ### 3. Act on instructions and report results back
 
-Before executing an instruction, claim its exact ID through the single running
-server. Use a stable consumer ID unique to this worker:
+Before executing an instruction, claim its exact ID through the running
+server or the MCP process sharing its state file. Use a stable consumer ID unique to this worker:
 
 ```sh
 prdash instruction claim -server http://127.0.0.1:8080 -session <assigned-session> -id <instruction-id> -consumer <consumer-id>
@@ -134,8 +134,9 @@ failed claim's consumer, token and attempt; the next claim gets a fresh attempt.
 Identical result resends are safe, but execution is not exactly-once. A stale
 result is retained without applying PR status to a newer instruction/head/session.
 Legacy `report` is an uncorrelated status report and does not acknowledge queued
-instructions. Do not use bulk ack or independent state-file writers for parallel
-execution. See the integration reference's instruction lifecycle for the complete contract.
+instructions. Do not use bulk ack for parallel execution. Check command/API
+errors and the snapshot's `state_path` / `state_error` before continuing. Corrupt
+state is preserved; resolve the error instead of treating an empty result as success. See the integration reference's instruction lifecycle for the complete contract.
 
 ### Available MCP Tools
 

@@ -161,7 +161,9 @@ func (s *Service) WatchStateFile(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			s.mu.Lock()
+			previousError := s.stateErrorStringLocked()
 			changed := s.reloadStateFileIfChangedLocked()
+			changed = changed || previousError != s.stateErrorStringLocked()
 			var snap Snapshot
 			if changed {
 				snap = s.snapshotLocked()

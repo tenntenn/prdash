@@ -55,7 +55,7 @@ func instructionMCPTools() []mcpTool {
 			properties["consumer_id"] = map[string]any{"type": "string", "description": "Stable ID unique to this consumer"}
 			required = append(required, "consumer_id")
 			if name == "claim_instruction" {
-				description = "Atomically claim one instruction through this running Service owner. Same consumer can recover its running claim."
+				description = "Atomically claim one instruction across clients sharing this state file. Same consumer can recover its running claim."
 				properties["target_commit"] = map[string]any{"type": "string", "description": "Required when the PR target is not known; must match an already captured target"}
 			} else {
 				properties["claim_token"] = map[string]any{"type": "string"}

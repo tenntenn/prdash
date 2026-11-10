@@ -89,8 +89,8 @@ func (s *Service) AckInstruction(sessionID, instructionID string) (SessionMessag
 	})
 }
 
-// ClaimInstruction atomically claims one instruction within this Service owner.
-// All consumers must use the same running owner, not separate state-file writers.
+// ClaimInstruction atomically claims one instruction across Service instances
+// sharing a persistent state file, or within this Service for in-memory state.
 func (s *Service) ClaimInstruction(req InstructionClaimRequest) (InstructionClaim, error) {
 	req.ConsumerID = strings.TrimSpace(req.ConsumerID)
 	if req.ConsumerID == "" {

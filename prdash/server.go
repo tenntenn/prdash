@@ -38,7 +38,12 @@ func NewHandler(svc *Service) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, svc.Snapshot())
+		snap := svc.Snapshot()
+		status := http.StatusOK
+		if snap.StateError != "" {
+			status = http.StatusInternalServerError
+		}
+		writeJSON(w, status, snap)
 	})
 
 	mux.HandleFunc("POST /api/sync", func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +61,12 @@ func NewHandler(svc *Service) http.Handler {
 
 	mux.HandleFunc("GET /api/sessions/{id}/instructions", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		writeJSON(w, http.StatusOK, svc.PendingInstructions(id))
+		pending := svc.PendingInstructions(id)
+		if err := svc.StateError(); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, pending)
 	})
 
 	mux.HandleFunc("POST /api/sessions/{id}/ack", func(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +486,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, ErrInstructionNotFound), errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, ErrInstructionSession), errors.Is(err, ErrInstructionConflict):
+	case errors.Is(err, ErrStateConflict), errors.Is(err, ErrInstructionSession), errors.Is(err, ErrInstructionConflict):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, ErrInstructionInput), errors.Is(err, ErrInvalidModelTier), errors.Is(err, ErrInvalidPRStatus), errors.Is(err, ErrInvalidRoutineAction), errors.Is(err, ErrEmptyMessage):
 		writeError(w, http.StatusBadRequest, err)

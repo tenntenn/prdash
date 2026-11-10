@@ -15,7 +15,9 @@ func (s *Service) AssignPR(number int, worktreeID, sessionID string) (PullReques
 	if worktreeID == "" || sessionID == "" {
 		return PullRequest{}, errors.New("worktree and session IDs are required")
 	}
-	s.mu.Lock()
+	if err := s.beginStateMutation(); err != nil {
+		return PullRequest{}, err
+	}
 	s.reloadStateFileIfChangedLocked()
 	worktreeFound := false
 	for _, wt := range s.worktrees {
@@ -25,7 +27,7 @@ func (s *Service) AssignPR(number int, worktreeID, sessionID string) (PullReques
 		}
 	}
 	if !worktreeFound {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("worktree %q is not registered", worktreeID)
 	}
 	sessionFound := false
@@ -36,7 +38,7 @@ func (s *Service) AssignPR(number int, worktreeID, sessionID string) (PullReques
 		}
 	}
 	if !sessionFound {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
 	index := -1
@@ -47,7 +49,7 @@ func (s *Service) AssignPR(number int, worktreeID, sessionID string) (PullReques
 		}
 	}
 	if index < 0 {
-		s.mu.Unlock()
+		s.abortStateMutation()
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, number)
 	}
 	pr := &s.prs[index]
@@ -56,8 +58,10 @@ func (s *Service) AssignPR(number int, worktreeID, sessionID string) (PullReques
 	pr.UpdatedAt = time.Now().UTC()
 	s.dirty = true
 	result := clonePR(*pr)
-	snap := s.snapshotLocked()
-	s.mu.Unlock()
+	snap, err := s.commitStateMutation()
+	if err != nil {
+		return PullRequest{}, err
+	}
 	s.broadcast(snap)
 	return result, nil
 }

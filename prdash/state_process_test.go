@@ -227,3 +227,57 @@ func TestStateSerializationFailureRollsBack(t *testing.T) {
 		t.Fatalf("failed update remained in memory: %v", err)
 	}
 }
+
+func TestStateCorruptionIsVisibleThroughHTTPAndMCP(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path := filepath.Join(root, "state.json")
+	svc := prdash.NewService(prdash.Options{StateFile: path})
+	if err := os.WriteFile(path, []byte("not JSON"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := prdash.NewHandler(svc)
+	rec := instructionHTTP(t, handler, "GET", "/api/state", "")
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "state_error") {
+		t.Fatalf("HTTP hid corrupt state: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = instructionHTTP(t, handler, "POST", "/api/sessions", `{"id":"new-session"}`)
+	if rec.Code < 400 {
+		t.Fatalf("HTTP mutation succeeded on corrupt state: %d %s", rec.Code, rec.Body.String())
+	}
+	var output strings.Builder
+	input := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_dashboard","arguments":{}}}` + "\n"
+	if err := prdash.RunMCP(t.Context(), svc, strings.NewReader(input), &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"isError":true`) {
+		t.Fatalf("MCP hid corrupt state: %s", output.String())
+	}
+}
+
+func TestStatePathResolvesSymlinkAliases(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	first := prdash.NewService(prdash.Options{StateFile: filepath.Join(realDir, "state.json")})
+	second := prdash.NewService(prdash.Options{StateFile: filepath.Join(alias, "state.json")})
+	if first.StatePath() != second.StatePath() {
+		t.Fatalf("aliases use different lock targets: %s %s", first.StatePath(), second.StatePath())
+	}
+	if _, err := first.SendControllerInstruction("first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.SendControllerInstruction("second"); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Snapshot().ControllerSession.Messages) != 2 {
+		t.Fatal("alias lost update")
+	}
+}

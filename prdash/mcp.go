@@ -176,7 +176,8 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 	case "reload_config":
 		return svc.ReloadConfig(ctx)
 	case "get_dashboard":
-		return svc.Snapshot(), nil
+		snap := svc.Snapshot()
+		return snap, svc.StateError()
 
 	case "sync_repository":
 		var args struct {
@@ -190,7 +191,8 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 			SessionID string `json:"session_id"`
 		}
 		_ = json.Unmarshal(rawArgs, &args)
-		return svc.PendingInstructions(args.SessionID), nil
+		pending := svc.PendingInstructions(args.SessionID)
+		return pending, svc.StateError()
 
 	case "ack_instructions":
 		var args struct {
@@ -209,7 +211,8 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return nil, err
 		}
-		return svc.ListPRs(args.Status, args.StackID), nil
+		prs := svc.ListPRs(args.Status, args.StackID)
+		return prs, svc.StateError()
 
 	case "get_pr":
 		var args struct {
