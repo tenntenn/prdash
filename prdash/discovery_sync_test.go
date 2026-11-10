@@ -171,10 +171,28 @@ func TestSyncHTTPPartialFailureAndCachedError(t *testing.T) {
 	bin := fakeSyncGH(t, []byte(`[{"number":1,"title":"sample","state":"OPEN"}]`), false)
 	svc := NewService(Options{Repository: "example/sample", WorkDir: t.TempDir()})
 	handler := NewHandler(svc)
+	request := func(method, path string) *http.Request {
+		req := httptest.NewRequest(method, "http://127.0.0.1:1234"+path, strings.NewReader(`{}`))
+		req.RemoteAddr = "127.0.0.1:1235"
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+	auth := request(http.MethodGet, "/api/auth")
+	auth.Header.Set("X-Prdash-Client", "dashboard")
+	bootstrap := httptest.NewRecorder()
+	handler.ServeHTTP(bootstrap, auth)
+	var credential struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &credential); err != nil || credential.Token == "" {
+		t.Fatalf("bootstrap failed: %d %v", bootstrap.Code, err)
+	}
 	var previous []byte
 	for range 2 {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sync", strings.NewReader(`{}`)))
+		req := request(http.MethodPost, "/api/sync")
+		req.Header.Set("Authorization", "Bearer "+credential.Token)
+		handler.ServeHTTP(response, req)
 		if response.Code < 400 {
 			t.Fatalf("partial failure hidden: %d %s", response.Code, response.Body.String())
 		}
@@ -188,7 +206,7 @@ func TestSyncHTTPPartialFailureAndCachedError(t *testing.T) {
 		previous = calls
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	handler.ServeHTTP(response, request(http.MethodGet, "/api/state"))
 	var snapshot Snapshot
 	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
