@@ -33,17 +33,18 @@ type Options struct {
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
-	config      EffectiveConfig
-	configErr   error
-	mu          sync.RWMutex
-	seq         atomic.Int64
-	stateFile   string
-	workDir     string
-	stateRev    int64
-	dirty       bool
-	repo        RepositoryInfo
-	modelConfig ModelPresetConfig
-	reviewer    SBNNReviewer
+	instructionClaims map[string]string
+	config            EffectiveConfig
+	configErr         error
+	mu                sync.RWMutex
+	seq               atomic.Int64
+	stateFile         string
+	workDir           string
+	stateRev          int64
+	dirty             bool
+	repo              RepositoryInfo
+	modelConfig       ModelPresetConfig
+	reviewer          SBNNReviewer
 
 	controller    Session
 	worktrees     []Worktree
@@ -496,6 +497,13 @@ func (s *Service) recordInterSessionWithConfigLocked(from, to, direction string,
 		Text:      text,
 		CreatedAt: now,
 	}
+	if direction == "instruction" {
+		msg.ExecutionState = InstructionQueued
+		msg.ExecutionUpdatedAt = now
+		if pr, _ := s.findPRLocked(prNumber); pr != nil {
+			msg.TargetCommit = s.instructionTargetLocked(pr)
+		}
+	}
 	s.controller.Messages = append(s.controller.Messages, msg)
 	s.controller.UpdatedAt = now
 
@@ -568,7 +576,8 @@ func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 	return out
 }
 
-// AckInstructions marks unhandled instructions for sessionID (and optional prNumber) as handled.
+// AckInstructions acknowledges delivery in bulk, never execution completion.
+// Deprecated: use AckInstruction for a fetched instruction ID to avoid acknowledging new arrivals.
 func (s *Service) AckInstructions(sessionID string, prNumber int) int {
 	s.mu.Lock()
 	s.reloadStateFileIfChangedLocked()
@@ -590,7 +599,7 @@ func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) 
 	acked := 0
 	for i := range s.controller.Messages {
 		m := &s.controller.Messages[i]
-		if m.Direction != "instruction" || m.Handled {
+		if m.Direction != "instruction" || m.Handled || m.ExecutionState == InstructionRunning {
 			continue
 		}
 		if targetID != "" && m.To != targetID {
@@ -600,6 +609,7 @@ func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) 
 			continue
 		}
 		m.Handled = true
+		m.ExecutionState = InstructionDelivered
 		acked++
 	}
 	for si := range s.sessions {
@@ -608,13 +618,14 @@ func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) 
 		}
 		for mi := range s.sessions[si].Messages {
 			m := &s.sessions[si].Messages[mi]
-			if m.Direction != "instruction" || m.Handled {
+			if m.Direction != "instruction" || m.Handled || m.ExecutionState == InstructionRunning {
 				continue
 			}
 			if prNumber > 0 && m.PRNumber != prNumber {
 				continue
 			}
 			m.Handled = true
+			m.ExecutionState = InstructionDelivered
 		}
 	}
 	if targetID == "" || targetID == s.controller.ID {
@@ -1075,7 +1086,6 @@ func (s *Service) SetPRStatus(prNumber int, status PRStatus, summary string) (Pu
 	})
 
 	if status == StatusWaitingForHuman && prevStatus != StatusWaitingForHuman {
-		s.markInstructionsHandledLocked(pr.SessionID, pr.Number)
 		s.recordInterSessionLocked(pr.SessionID, s.controller.ID, "report", pr.Number, summary, now)
 		s.emitNotificationLocked(
 			pr,
@@ -1259,13 +1269,15 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	now := time.Now().UTC()
 	cfg := cloneEffectiveConfig(s.config)
 	userMsg := SessionMessage{
-		AppliedConfig: &cfg,
-		ID:            s.nextID("cmsg"),
-		From:          "human",
-		To:            s.controller.ID,
-		Direction:     "instruction",
-		Text:          text,
-		CreatedAt:     now,
+		ExecutionState:     InstructionQueued,
+		ExecutionUpdatedAt: now,
+		AppliedConfig:      &cfg,
+		ID:                 s.nextID("cmsg"),
+		From:               "human",
+		To:                 s.controller.ID,
+		Direction:          "instruction",
+		Text:               text,
+		CreatedAt:          now,
 	}
 	s.controller.Messages = append(s.controller.Messages, userMsg)
 	s.controller.ActiveTask = text
@@ -1297,6 +1309,10 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 		return PullRequest{}, fmt.Errorf("%w: #%d", ErrPRNotFound, prNumber)
 	}
 
+	if sessionID != pr.SessionID || strings.TrimSpace(sessionID) == "" {
+		s.mu.Unlock()
+		return PullRequest{}, ErrInstructionSession
+	}
 	now := time.Now().UTC()
 	prevStatus := pr.Status
 	sessName := sessionID
@@ -1321,7 +1337,6 @@ func (s *Service) ReportSessionResult(sessionID string, prNumber int, status PRS
 		Text:      report,
 		CreatedAt: now,
 	})
-	s.markInstructionsHandledLocked(sessionID, pr.Number)
 	s.recordInterSessionLocked(sessionID, s.controller.ID, "report", pr.Number, report, now)
 
 	if status == StatusWaitingForHuman && prevStatus != StatusWaitingForHuman {

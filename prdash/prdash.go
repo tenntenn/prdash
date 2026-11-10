@@ -124,6 +124,16 @@ type Worktree struct {
 
 // SessionMessage represents an instruction or report exchanged with an agent session.
 type SessionMessage struct {
+	InstructionID      string           `json:"instruction_id,omitempty"`
+	TargetCommit       string           `json:"target_commit,omitempty"`
+	ExecutionState     InstructionState `json:"execution_state,omitempty"`
+	ConsumerID         string           `json:"consumer_id,omitempty"`
+	Attempt            int              `json:"attempt,omitempty"`
+	Result             string           `json:"result,omitempty"`
+	ResultStatus       PRStatus         `json:"result_status,omitempty"`
+	ResultApplied      bool             `json:"result_applied,omitempty"`
+	ExecutionUpdatedAt time.Time        `json:"execution_updated_at"`
+
 	AppliedConfig *EffectiveConfig `json:"applied_config,omitempty"`
 	ID            string           `json:"id"`
 	From          string           `json:"from"`
@@ -168,6 +178,7 @@ type ThreadMessage struct {
 
 // PullRequest represents a pull request created and maintained by an agent session.
 type PullRequest struct {
+	HeadSHA        string          `json:"head_sha,omitempty"`
 	ID             string          `json:"id"`
 	Number         int             `json:"number"`
 	Title          string          `json:"title"`
