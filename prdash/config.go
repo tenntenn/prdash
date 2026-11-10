@@ -442,6 +442,10 @@ func cloneSessionMessage(in SessionMessage) SessionMessage {
 }
 func cloneThreadMessage(in ThreadMessage) ThreadMessage {
 	out := in
+	if in.ReviewExecution != nil {
+		execution := cloneReviewExecution(*in.ReviewExecution)
+		out.ReviewExecution = &execution
+	}
 	if in.AppliedConfig != nil {
 		cfg := cloneEffectiveConfig(*in.AppliedConfig)
 		out.AppliedConfig = &cfg

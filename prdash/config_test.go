@@ -235,18 +235,21 @@ func (r *reloadingConfigReviewer) RunReview(ctx context.Context, req prdash.SBNN
 func TestInFlightReviewKeepsConfiguration(t *testing.T) {
 	t.Parallel()
 	root := configRepo(t)
-	writeRepoConfig(t, root, "review:\n  agent: sample-first\n")
+	writeRepoConfig(t, root, "review:\n  agent: sbnn\n")
 	reviewer := &reloadingConfigReviewer{root: root}
 	svc := prdash.NewService(prdash.Options{WorkDir: root, Reviewer: reviewer})
 	reviewer.service = svc
-	if _, err := svc.UpsertPR(prdash.PullRequest{Number: 42, Title: "sample-pr", Branch: "sample-branch"}); err != nil {
+	if _, err := svc.UpsertWorktree(prdash.Worktree{ID: "sample-wt", Path: root, Branch: "sample-branch", HeadSHA: strings.Repeat("a", 40)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpsertPR(prdash.PullRequest{Number: 42, Title: "sample-pr", Branch: "sample-branch", WorktreeID: "sample-wt"}); err != nil {
 		t.Fatal(err)
 	}
 	pr, err := svc.RequestReview(t.Context(), 42, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reviewer.captured.Config.Review.Agent != "sample-first" || svc.EffectiveConfig().Config.Review.Agent != "sample-second" {
+	if reviewer.captured.Config.Review.Agent != "sbnn" || svc.EffectiveConfig().Config.Review.Agent != "sample-second" {
 		t.Fatal("in-flight config was not frozen")
 	}
 	for _, msg := range pr.Thread {

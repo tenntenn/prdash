@@ -240,7 +240,7 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		}
 		return svc.PostSBNNComment(ctx, args.PRNumber, args.FilePath, args.Line, args.Body)
 
-	case "request_review":
+	case "preview_review":
 		var args struct {
 			PRNumber int    `json:"pr_number"`
 			Focus    string `json:"focus"`
@@ -248,7 +248,17 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return nil, err
 		}
-		return svc.RequestReview(ctx, args.PRNumber, args.Focus)
+		return svc.PreviewReview(ctx, args.PRNumber, args.Focus)
+	case "request_review":
+		var args struct {
+			PRNumber   int    `json:"pr_number"`
+			Focus      string `json:"focus"`
+			PreviewKey string `json:"preview_key"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, err
+		}
+		return svc.RequestReviewWithPreview(ctx, args.PRNumber, args.Focus, args.PreviewKey)
 
 	case "address_review":
 		var args struct {
@@ -471,6 +481,7 @@ func mcpToolsList() []mcpTool {
 				},
 			},
 		},
+		{Name: "preview_review", Description: "Inspect the connected reviewer, requested model, instruction text, target commit and configuration before dispatch.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"pr_number": map[string]any{"type": "integer"}, "focus": map[string]any{"type": "string"}}, "required": []string{"pr_number"}}},
 		{
 			Name:        "request_review",
 			Description: "Trigger an automated review on a pull request via sbnn.",
@@ -478,8 +489,9 @@ func mcpToolsList() []mcpTool {
 				"type":     "object",
 				"required": []string{"pr_number"},
 				"properties": map[string]any{
-					"pr_number": map[string]any{"type": "integer", "description": "Pull request number"},
-					"focus":     map[string]any{"type": "string", "description": "Optional review focus area"},
+					"pr_number":   map[string]any{"type": "integer", "description": "Pull request number"},
+					"preview_key": map[string]any{"type": "string", "description": "Optional preview key; rejects changed reviewer, target or policy"},
+					"focus":       map[string]any{"type": "string", "description": "Optional review focus area"},
 				},
 			},
 		},

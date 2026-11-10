@@ -155,15 +155,16 @@ type Session struct {
 
 // ThreadMessage represents a message or event in a pull request's interaction thread.
 type ThreadMessage struct {
-	AppliedConfig *EffectiveConfig `json:"applied_config,omitempty"`
-	ID            string           `json:"id"`
-	Author        string           `json:"author"`
-	Role          string           `json:"role"` // "human", "session", "controller", "sbnn", "system"
-	Kind          string           `json:"kind"` // "message", "review_comment", "review_request", "review_fix", "routine_action", "status_change"
-	Text          string           `json:"text"`
-	FilePath      string           `json:"file_path,omitempty"`
-	Line          int              `json:"line,omitempty"`
-	CreatedAt     time.Time        `json:"created_at"`
+	ReviewExecution *ReviewExecution `json:"review_execution,omitempty"`
+	AppliedConfig   *EffectiveConfig `json:"applied_config,omitempty"`
+	ID              string           `json:"id"`
+	Author          string           `json:"author"`
+	Role            string           `json:"role"` // "human", "session", "controller", "sbnn", "system"
+	Kind            string           `json:"kind"` // "message", "review_comment", "review_request", "review_fix", "routine_action", "status_change"
+	Text            string           `json:"text"`
+	FilePath        string           `json:"file_path,omitempty"`
+	Line            int              `json:"line,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
 }
 
 // PullRequest represents a pull request created and maintained by an agent session.

@@ -34,6 +34,7 @@ type SBNNCommentResult struct {
 
 // SBNNReviewRequest describes an automated review request sent to sbnn.
 type SBNNReviewRequest struct {
+	Execution     ReviewExecution `json:"execution"`
 	AppliedConfig EffectiveConfig `json:"applied_config"`
 	Repository    string          `json:"repository"`
 	PRNumber      int             `json:"pr_number"`
@@ -45,10 +46,11 @@ type SBNNReviewRequest struct {
 
 // SBNNReviewResult contains the structured findings returned by sbnn.
 type SBNNReviewResult struct {
-	CommandLine string    `json:"command_line"`
-	Summary     string    `json:"summary"`
-	Findings    []string  `json:"findings"`
-	CreatedAt   time.Time `json:"created_at"`
+	AppliedModel string    `json:"applied_model,omitempty"`
+	CommandLine  string    `json:"command_line"`
+	Summary      string    `json:"summary"`
+	Findings     []string  `json:"findings"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // SBNNReviewer defines the integration boundary for the local sbnn review tool.

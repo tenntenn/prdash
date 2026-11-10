@@ -177,6 +177,19 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, pr)
 	})
 
+	mux.HandleFunc("GET /api/prs/{number}/review-preview", func(w http.ResponseWriter, r *http.Request) {
+		number, err := strconv.Atoi(r.PathValue("number"))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		plan, err := svc.PreviewReview(r.Context(), number, r.URL.Query().Get("focus"))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+	})
 	mux.HandleFunc("POST /api/prs/{number}/request-review", func(w http.ResponseWriter, r *http.Request) {
 		num, parseErr := parsePRNumber(r)
 		if parseErr != nil {
@@ -184,10 +197,11 @@ func NewHandler(svc *Service) http.Handler {
 			return
 		}
 		var body struct {
-			Focus string `json:"focus"`
+			Focus      string `json:"focus"`
+			PreviewKey string `json:"preview_key"`
 		}
 		_ = decodeJSON(r, &body)
-		pr, reqErr := svc.RequestReview(r.Context(), num, body.Focus)
+		pr, reqErr := svc.RequestReviewWithPreview(r.Context(), num, body.Focus, body.PreviewKey)
 		if reqErr != nil {
 			writeServiceError(w, reqErr)
 			return
@@ -467,7 +481,7 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrConfigValidation):
+	case errors.Is(err, ErrConfigValidation), errors.Is(err, ErrReviewerUnavailable):
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)

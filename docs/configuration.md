@@ -88,3 +88,6 @@ commands or external actions. This configuration layer validates and carries
 policy to request consumers; agent selection and response workflow execution
 are separate integrations. A configuration value alone does not launch an
 agent or authorize an external action.
+
+See [reviewer selection and execution](reviewers.md) for resolving these settings
+to connected reviewer runtimes and inspecting a request before dispatch.

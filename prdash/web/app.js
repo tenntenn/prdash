@@ -383,7 +383,7 @@
                 <h4 class="action-box-title">Review &amp; Turn Handoff</h4>
                 <div class="button-cluster">
                   <button type="button" class="btn btn-secondary btn-sm" data-request-review="${pr.number}">
-                    Request Review (sbnn)
+                    Preview & Request Review
                   </button>
                   <button type="button" class="btn btn-primary btn-sm" data-address-review="${pr.number}">
                     Address Review
@@ -525,7 +525,12 @@
     if (reqReviewBtn) {
       const prNum = Number(reqReviewBtn.dataset.requestReview);
       openPRs.add(prNum);
-      await apiPost(`/api/prs/${prNum}/request-review`, {});
+      const response = await fetch(`/api/prs/${prNum}/review-preview`);
+      const plan = await response.json();
+      if (!response.ok) throw new Error(plan.error || "Reviewer unavailable");
+      const details = `Reviewer: ${plan.agent} (${plan.reviewer_session_id || "local tool"})\nRole: ${plan.session_role}\nRequested model: ${plan.requested_model || "runtime default (not yet observed)"}\nCommit: ${plan.target_commit}\nConfig: ${plan.config.source_path}\nInstructions:\n${plan.instructions || "(none)"}`;
+      if (!window.confirm(`${details}\n\nDispatch this review?`)) return;
+      await apiPost(`/api/prs/${prNum}/request-review`, { preview_key: plan.preview_key });
       return;
     }
 

@@ -45,6 +45,8 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 {
 		switch args[0] {
+		case "review-preview":
+			return runReviewPreviewCmd(ctx, args[1:], stdout, stderr)
 		case "config":
 			return runConfigCmd(ctx, args[1:], stdout, stderr)
 		case "skill":

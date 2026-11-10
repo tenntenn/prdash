@@ -23,27 +23,30 @@ var (
 
 // Options configures a new Service instance.
 type Options struct {
-	Repository  string
-	WorkDir     string
-	StateFile   string
-	ModelConfig *ModelPresetConfig
-	Reviewer    SBNNReviewer
+	ReviewRuntimes map[string]ReviewRuntimeBinding
+	Repository     string
+	WorkDir        string
+	StateFile      string
+	ModelConfig    *ModelPresetConfig
+	Reviewer       SBNNReviewer
 }
 
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
-	config      EffectiveConfig
-	configErr   error
-	mu          sync.RWMutex
-	seq         atomic.Int64
-	stateFile   string
-	workDir     string
-	stateRev    int64
-	dirty       bool
-	repo        RepositoryInfo
-	modelConfig ModelPresetConfig
-	reviewer    SBNNReviewer
+	reviewRuntimes map[string]ReviewRuntimeBinding
+	activeReviews  map[int]bool
+	config         EffectiveConfig
+	configErr      error
+	mu             sync.RWMutex
+	seq            atomic.Int64
+	stateFile      string
+	workDir        string
+	stateRev       int64
+	dirty          bool
+	repo           RepositoryInfo
+	modelConfig    ModelPresetConfig
+	reviewer       SBNNReviewer
 
 	controller    Session
 	worktrees     []Worktree
@@ -111,6 +114,12 @@ func NewService(opts Options) *Service {
 		prs:           make([]PullRequest, 0),
 		notifications: make([]Notification, 0),
 		subscribers:   make(map[int64]chan Snapshot),
+	}
+	svc.activeReviews = make(map[int]bool)
+	svc.reviewRuntimes = make(map[string]ReviewRuntimeBinding, len(opts.ReviewRuntimes))
+	for id, binding := range opts.ReviewRuntimes {
+		binding.SupportedModels = slices.Clone(binding.SupportedModels)
+		svc.reviewRuntimes[id] = binding
 	}
 	svc.seq.Store(1000)
 	if svc.stateFile != "" {
@@ -760,29 +769,18 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 
 // RequestReview runs a review via the sbnn integration boundary and updates the PR thread.
 func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string) (PullRequest, error) {
-	if err := s.ConfigLoadError(); err != nil {
-		return PullRequest{}, err
-	}
-	prCopy, err := s.GetPR(prNumber)
-	if err != nil {
-		return PullRequest{}, err
-	}
-	s.mu.RLock()
-	repoFullName := s.repo.FullName
-	applied := cloneEffectiveConfig(s.config)
-	s.mu.RUnlock()
-	req := SBNNReviewRequest{
-		AppliedConfig: cloneEffectiveConfig(applied),
-		Repository:    repoFullName,
-		PRNumber:      prCopy.Number,
-		Branch:        prCopy.Branch,
-		BaseBranch:    prCopy.BaseBranch,
-		Worktree:      prCopy.WorktreeID,
-		Focus:         strings.TrimSpace(focus),
-	}
+	return s.RequestReviewWithPreview(ctx, prNumber, focus, "")
+}
 
-	reviewRes, err := s.reviewer.RunReview(ctx, req)
+// RequestReviewWithPreview rejects dispatch if a displayed plan has changed.
+func (s *Service) RequestReviewWithPreview(ctx context.Context, prNumber int, focus, previewKey string) (PullRequest, error) {
+	req, runtime, err := s.beginReview(ctx, prNumber, focus, previewKey)
 	if err != nil {
+		return PullRequest{}, err
+	}
+	applied := cloneEffectiveConfig(req.AppliedConfig)
+	reviewRes, runErr := runtime.RunReview(ctx, req)
+	if err := s.finishReviewAudit(req, reviewRes, runErr); err != nil {
 		return PullRequest{}, err
 	}
 
@@ -795,36 +793,21 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 
 	now := reviewRes.CreatedAt
 	prevStatus := pr.Status
-	reqLabel := "Requested code review via sbnn."
-	if req.Focus != "" {
-		reqLabel = fmt.Sprintf("Requested code review via sbnn (focus: %s).", req.Focus)
+	execution := cloneReviewExecution(req.Execution)
+	execution.Status = "completed"
+	execution.AppliedModel = reviewRes.AppliedModel
+	execution.ActualReviewer = execution.ReviewerSessionID
+	if execution.ActualReviewer == "" {
+		execution.ActualReviewer = execution.Agent
 	}
-	pr.Thread = append(pr.Thread,
-		ThreadMessage{
-			AppliedConfig: &applied,
-			ID:            s.nextID("msg"),
-			Author:        "Dashboard Orchestrator",
-			Role:          "controller",
-			Kind:          "review_request",
-			Text:          reqLabel,
-			CreatedAt:     now,
-		},
-		ThreadMessage{
-			AppliedConfig: &applied,
-			ID:            s.nextID("msg"),
-			Author:        "sbnn",
-			Role:          "sbnn",
-			Kind:          "review_comment",
-			Text:          fmt.Sprintf("%s (invoked: `%s`)", reviewRes.Summary, reviewRes.CommandLine),
-			CreatedAt:     now.Add(time.Millisecond),
-		},
-	)
+	pr.Thread = append(pr.Thread, ThreadMessage{AppliedConfig: &applied, ReviewExecution: &execution, ID: s.nextID("msg"), Author: execution.ActualReviewer, Role: "reviewer", Kind: "review_comment", Text: reviewRes.Summary, CreatedAt: now})
+
 	pr.UpdatedAt = now.Add(time.Millisecond)
 
 	if len(reviewRes.Findings) > 0 {
 		pr.ReviewStatus = "changes_requested"
 		if pr.AutoMode {
-			taskText := fmt.Sprintf("Address %d sbnn review finding(s): %s", len(reviewRes.Findings), reviewRes.Summary)
+			taskText := fmt.Sprintf("Address %d review finding(s): %s", len(reviewRes.Findings), reviewRes.Summary)
 			pr.Status = StatusWorking
 			if sess, _ := s.findSessionLocked(pr.SessionID); sess != nil {
 				sess.ActiveTask = fmt.Sprintf("PR #%d: %s", pr.Number, taskText)
@@ -840,7 +823,7 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 					StatusWorking,
 					StatusWaitingForHuman,
 					fmt.Sprintf("PR #%d Review Ready for Human", pr.Number),
-					fmt.Sprintf("sbnn review finished for PR #%d; awaiting human decision.", pr.Number),
+					fmt.Sprintf("Review finished for PR #%d; awaiting human decision.", pr.Number),
 					pr.UpdatedAt,
 				)
 			}
@@ -853,7 +836,7 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 				StatusWorking,
 				StatusWaitingForHuman,
 				fmt.Sprintf("PR #%d Review Clean (Waiting for Human)", pr.Number),
-				fmt.Sprintf("sbnn review found no open comments on PR #%d.", pr.Number),
+				fmt.Sprintf("Review found no open comments on PR #%d.", pr.Number),
 				pr.UpdatedAt,
 			)
 		}
