@@ -39,7 +39,7 @@ async function setup(t) {
   const sseReady = new Promise((resolve) => { connected = resolve; });
   let posted;
   const postReceived = new Promise((resolve) => { posted = resolve; });
-  const fixture = { snap, mode: "success", requests: [], pending: null, postReceived, failRefresh: false };
+  const fixture = { snap, mode: "success", requests: [], pending: null, postReceived, failRefresh: false, token: "sample-initial-token", attempts: [], bootstraps: 0, failAuth: false };
   fixture.publish = () => {
     for (const client of clients) client.write(`data: ${JSON.stringify(snap)}\n\n`);
   };
@@ -57,9 +57,23 @@ async function setup(t) {
       connected();
       return;
     }
+    if (req.url === "/api/auth") {
+      fixture.bootstraps++;
+      assert.equal(req.headers["x-prdash-client"], "dashboard");
+      res.writeHead(fixture.failAuth ? 503 : 200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(fixture.failAuth ? { error: "Temporary refresh failure" } : { token: fixture.token }));
+      return;
+    }
     if (req.method === "POST") {
       let body = "";
       for await (const chunk of req) body += chunk;
+      fixture.attempts.push({ path: req.url, body });
+      if (req.headers.authorization !== `Bearer ${fixture.token}`) {
+        fixture.publish();
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ code: "authentication_required", error: "Expired credentials" }));
+        return;
+      }
       fixture.requests.push({ path: req.url, payload: JSON.parse(body) });
       posted();
       if (fixture.mode === "network-error") { res.destroy(); return; }
@@ -78,7 +92,7 @@ async function setup(t) {
       res.end(JSON.stringify(snap));
       return;
     }
-    const assets = { "/": ["index.html", "text/html"], "/app.js": ["app.js", "text/javascript"], "/styles.css": ["styles.css", "text/css"] };
+    const assets = { "/http-client.js": ["http-client.js", "text/javascript"], "/": ["index.html", "text/html"], "/app.js": ["app.js", "text/javascript"], "/styles.css": ["styles.css", "text/css"] };
     const asset = assets[req.url];
     if (!asset) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { "Content-Type": asset[1] });
@@ -207,4 +221,49 @@ test("an accepted submission is cleared even when the following state refresh fa
   await assertValues(f.page, forms[0], true);
   await f.page.getByText("Your change was accepted. The dashboard will reconnect.", { exact: true }).waitFor();
   assert.equal(f.requests.length, 1);
+});
+
+
+test("expired credentials refresh without dropping drafts or executing twice", async (t) => {
+  const f = await setup(t);
+  await f.page.evaluate(() => window.prdashHTTP.post("/api/warmup", {}));
+  f.requests.length = 0;
+  f.attempts.length = 0;
+  f.token = "sample-rotated-token";
+  for (const form of forms) await fillForm(f.page, form);
+  const editing = f.page.locator(`${forms[1].selector} [name="text"]`);
+  await editing.focus();
+  await editing.evaluate((input) => input.setSelectionRange(2, 8, "backward"));
+  await submit(f.page, forms[0].selector);
+  await settled(f.page, forms[0].selector);
+  await assertValues(f.page, forms[0], true);
+  for (const form of forms.slice(1)) await assertValues(f.page, form);
+  assert.deepEqual(await editing.evaluate((input) => [document.activeElement === input, input.selectionStart, input.selectionEnd, input.selectionDirection]), [true, 2, 8, "backward"]);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.attempts.length, 2);
+  assert.equal(f.attempts[0].body, f.attempts[1].body);
+  assert.equal(f.bootstraps, 2);
+});
+
+test("failed credential refresh preserves submitted draft for explicit retry", async (t) => {
+  const f = await setup(t);
+  await f.page.evaluate(() => window.prdashHTTP.post("/api/warmup", {}));
+  f.requests.length = 0;
+  f.attempts.length = 0;
+  f.token = "sample-rotated-token";
+  f.failAuth = true;
+  await fillForm(f.page, forms[0]);
+  await submit(f.page, forms[0].selector);
+  await settled(f.page, forms[0].selector);
+  await assertValues(f.page, forms[0]);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.attempts.length, 1);
+  await f.page.getByText("Could not refresh dashboard credentials. Please retry.", { exact: true }).waitFor();
+  f.failAuth = false;
+  await submit(f.page, forms[0].selector);
+  await settled(f.page, forms[0].selector);
+  await assertValues(f.page, forms[0], true);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.attempts.length, 2);
+  assert.equal(f.attempts[0].body, f.attempts[1].body);
 });
