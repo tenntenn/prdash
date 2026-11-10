@@ -89,6 +89,6 @@ Development tools are managed with [aqua](https://aquaproj.github.io/). Install 
 
 ```console
 task build     # build the command and embedded Skill
-task check     # format, run static analysis, and test with the race detector
+task check     # run go fix, goimports, go vet, and go test -race
 task ui:docs   # regenerate screenshots from example data
 ```
