@@ -33,6 +33,8 @@ type Options struct {
 // Service manages the repository dashboard state, inter-session communication,
 // sbnn review integration, and human notifications.
 type Service struct {
+	config      EffectiveConfig
+	configErr   error
 	mu          sync.RWMutex
 	seq         atomic.Int64
 	stateFile   string
@@ -94,7 +96,10 @@ func NewService(opts Options) *Service {
 		Messages:              make([]SessionMessage, 0),
 		UpdatedAt:             time.Now().UTC(),
 	}
+	config, configErr := LoadRepoConfig(context.Background(), opts.WorkDir)
 	svc := &Service{
+		config:        config,
+		configErr:     configErr,
 		stateFile:     strings.TrimSpace(opts.StateFile),
 		workDir:       strings.TrimSpace(opts.WorkDir),
 		repo:          repo,
@@ -354,7 +359,8 @@ func (s *Service) snapshotLocked() Snapshot {
 	}
 
 	return Snapshot{
-		Repository:        s.repo,
+		Config:      cloneEffectiveConfig(s.config),
+		ConfigError: s.configErrorStringLocked(), Repository: s.repo,
 		ModelConfig:       s.modelConfig,
 		ControllerSession: controller,
 		Sessions:          sessions,
@@ -368,7 +374,10 @@ func (s *Service) snapshotLocked() Snapshot {
 
 func cloneSession(in Session) Session {
 	out := in
-	out.Messages = slices.Clone(in.Messages)
+	out.Messages = make([]SessionMessage, len(in.Messages))
+	for i, msg := range in.Messages {
+		out.Messages[i] = cloneSessionMessage(msg)
+	}
 	if out.Messages == nil {
 		out.Messages = make([]SessionMessage, 0)
 	}
@@ -377,7 +386,10 @@ func cloneSession(in Session) Session {
 
 func clonePR(in PullRequest) PullRequest {
 	out := in
-	out.Thread = slices.Clone(in.Thread)
+	out.Thread = make([]ThreadMessage, len(in.Thread))
+	for i, msg := range in.Thread {
+		out.Thread[i] = cloneThreadMessage(msg)
+	}
 	if out.Thread == nil {
 		out.Thread = make([]ThreadMessage, 0)
 	}
@@ -470,8 +482,13 @@ func (s *Service) emitNotificationLocked(pr *PullRequest, fromStatus, toStatus P
 }
 
 func (s *Service) recordInterSessionLocked(from, to, direction string, prNumber int, text string, now time.Time) {
+	s.recordInterSessionWithConfigLocked(from, to, direction, prNumber, text, now, s.config)
+}
+
+func (s *Service) recordInterSessionWithConfigLocked(from, to, direction string, prNumber int, text string, now time.Time, applied EffectiveConfig) {
+	cfg := cloneEffectiveConfig(applied)
 	msg := SessionMessage{
-		ID:        s.nextID("smsg"),
+		AppliedConfig: &cfg, ID: s.nextID("smsg"),
 		From:      from,
 		To:        to,
 		Direction: direction,
@@ -546,7 +563,7 @@ func (s *Service) PendingInstructions(sessionID string) []SessionMessage {
 		if sessionID != "" && msg.To != sessionID && !(sessionID == "controller" && msg.To == s.controller.ID) {
 			continue
 		}
-		out = append(out, msg)
+		out = append(out, cloneSessionMessage(msg))
 	}
 	return out
 }
@@ -618,6 +635,9 @@ func (s *Service) markInstructionsHandledLocked(sessionID string, prNumber int) 
 // SendPRMessage appends an instruction to a PR's session thread, routes it to the assigned session,
 // and transitions the PR to StatusWorking until the session reports completion.
 func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return PullRequest{}, err
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return PullRequest{}, ErrEmptyMessage
@@ -665,6 +685,9 @@ func (s *Service) SendPRMessage(prNumber int, author, text string) (PullRequest,
 // PostSBNNComment submits a review comment through the sbnn integration boundary,
 // appends it to the PR thread, and queues a review-fix instruction if Auto-Mode is enabled.
 func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath string, line int, body string) (PullRequest, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return PullRequest{}, err
+	}
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return PullRequest{}, ErrEmptyMessage
@@ -676,15 +699,17 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 	}
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
+	applied := cloneEffectiveConfig(s.config)
 	s.mu.RUnlock()
 	req := SBNNCommentRequest{
-		Repository: repoFullName,
-		PRNumber:   prCopy.Number,
-		Branch:     prCopy.Branch,
-		Worktree:   prCopy.WorktreeID,
-		FilePath:   strings.TrimSpace(filePath),
-		Line:       line,
-		Body:       body,
+		AppliedConfig: cloneEffectiveConfig(applied),
+		Repository:    repoFullName,
+		PRNumber:      prCopy.Number,
+		Branch:        prCopy.Branch,
+		Worktree:      prCopy.WorktreeID,
+		FilePath:      strings.TrimSpace(filePath),
+		Line:          line,
+		Body:          body,
 	}
 
 	result, err := s.reviewer.SubmitComment(ctx, req)
@@ -701,14 +726,15 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 
 	now := result.CreatedAt
 	pr.Thread = append(pr.Thread, ThreadMessage{
-		ID:        result.CommentID,
-		Author:    "sbnn",
-		Role:      "sbnn",
-		Kind:      "review_comment",
-		FilePath:  req.FilePath,
-		Line:      req.Line,
-		Text:      fmt.Sprintf("%s (invoked: `%s`)", result.Formatted, result.CommandLine),
-		CreatedAt: now,
+		AppliedConfig: &applied,
+		ID:            result.CommentID,
+		Author:        "sbnn",
+		Role:          "sbnn",
+		Kind:          "review_comment",
+		FilePath:      req.FilePath,
+		Line:          req.Line,
+		Text:          fmt.Sprintf("%s (invoked: `%s`)", result.Formatted, result.CommandLine),
+		CreatedAt:     now,
 	})
 	pr.ReviewStatus = "changes_requested"
 	pr.UpdatedAt = now
@@ -721,7 +747,7 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 			sess.Status = "working"
 			sess.UpdatedAt = now
 		}
-		s.recordInterSessionLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, taskText, now)
+		s.recordInterSessionWithConfigLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, taskText, now, applied)
 	}
 
 	res := clonePR(*pr)
@@ -734,20 +760,25 @@ func (s *Service) PostSBNNComment(ctx context.Context, prNumber int, filePath st
 
 // RequestReview runs a review via the sbnn integration boundary and updates the PR thread.
 func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string) (PullRequest, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return PullRequest{}, err
+	}
 	prCopy, err := s.GetPR(prNumber)
 	if err != nil {
 		return PullRequest{}, err
 	}
 	s.mu.RLock()
 	repoFullName := s.repo.FullName
+	applied := cloneEffectiveConfig(s.config)
 	s.mu.RUnlock()
 	req := SBNNReviewRequest{
-		Repository: repoFullName,
-		PRNumber:   prCopy.Number,
-		Branch:     prCopy.Branch,
-		BaseBranch: prCopy.BaseBranch,
-		Worktree:   prCopy.WorktreeID,
-		Focus:      strings.TrimSpace(focus),
+		AppliedConfig: cloneEffectiveConfig(applied),
+		Repository:    repoFullName,
+		PRNumber:      prCopy.Number,
+		Branch:        prCopy.Branch,
+		BaseBranch:    prCopy.BaseBranch,
+		Worktree:      prCopy.WorktreeID,
+		Focus:         strings.TrimSpace(focus),
 	}
 
 	reviewRes, err := s.reviewer.RunReview(ctx, req)
@@ -770,20 +801,22 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 	}
 	pr.Thread = append(pr.Thread,
 		ThreadMessage{
-			ID:        s.nextID("msg"),
-			Author:    "Dashboard Orchestrator",
-			Role:      "controller",
-			Kind:      "review_request",
-			Text:      reqLabel,
-			CreatedAt: now,
+			AppliedConfig: &applied,
+			ID:            s.nextID("msg"),
+			Author:        "Dashboard Orchestrator",
+			Role:          "controller",
+			Kind:          "review_request",
+			Text:          reqLabel,
+			CreatedAt:     now,
 		},
 		ThreadMessage{
-			ID:        s.nextID("msg"),
-			Author:    "sbnn",
-			Role:      "sbnn",
-			Kind:      "review_comment",
-			Text:      fmt.Sprintf("%s (invoked: `%s`)", reviewRes.Summary, reviewRes.CommandLine),
-			CreatedAt: now.Add(time.Millisecond),
+			AppliedConfig: &applied,
+			ID:            s.nextID("msg"),
+			Author:        "sbnn",
+			Role:          "sbnn",
+			Kind:          "review_comment",
+			Text:          fmt.Sprintf("%s (invoked: `%s`)", reviewRes.Summary, reviewRes.CommandLine),
+			CreatedAt:     now.Add(time.Millisecond),
 		},
 	)
 	pr.UpdatedAt = now.Add(time.Millisecond)
@@ -798,7 +831,7 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 				sess.Status = "working"
 				sess.UpdatedAt = pr.UpdatedAt
 			}
-			s.recordInterSessionLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, taskText, pr.UpdatedAt)
+			s.recordInterSessionWithConfigLocked(s.controller.ID, pr.SessionID, "instruction", pr.Number, taskText, pr.UpdatedAt, applied)
 		} else {
 			pr.Status = StatusWaitingForHuman
 			if prevStatus == StatusWorking {
@@ -836,6 +869,9 @@ func (s *Service) RequestReview(ctx context.Context, prNumber int, focus string)
 
 // AddressReview queues an instruction for the assigned session to address review feedback on a pull request.
 func (s *Service) AddressReview(prNumber int, instruction string) (PullRequest, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return PullRequest{}, err
+	}
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
 		instruction = "Address all open review comments and verify test suite passes."
@@ -878,6 +914,9 @@ func (s *Service) AddressReview(prNumber int, instruction string) (PullRequest, 
 
 // RunRoutineAction queues a preset routine operation on the assigned session for a pull request.
 func (s *Service) RunRoutineAction(prNumber int, action RoutineAction) (PullRequest, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return PullRequest{}, err
+	}
 	switch action {
 	case ActionResolveConflicts, ActionRebaseStack, ActionFixCI, ActionSyncBranch, ActionUpdateSummary:
 	default:
@@ -941,6 +980,9 @@ func (s *Service) RunRoutineAction(prNumber int, action RoutineAction) (PullRequ
 // SetAutoMode toggles Auto-Mode for a pull request. When enabled on a PR with open blockers
 // (conflicts, failing CI, or requested review changes), an instruction is queued for the assigned session.
 func (s *Service) SetAutoMode(prNumber int, enabled bool) (PullRequest, error) {
+	if err := s.ConfigLoadError(); enabled && err != nil {
+		return PullRequest{}, err
+	}
 	s.mu.Lock()
 	pr, _ := s.findPRLocked(prNumber)
 	if pr == nil {
@@ -1173,6 +1215,9 @@ func (s *Service) UpdateModelConfig(cfg ModelPresetConfig) (ModelPresetConfig, e
 
 // SendDirectSessionInstruction queues a direct instruction for a worker session outside any specific PR thread.
 func (s *Service) SendDirectSessionInstruction(sessionID string, text string) (Session, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return Session{}, err
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Session{}, ErrEmptyMessage
@@ -1200,6 +1245,9 @@ func (s *Service) SendDirectSessionInstruction(sessionID string, text string) (S
 
 // SendControllerInstruction queues a human orchestration instruction for the dashboard controller session.
 func (s *Service) SendControllerInstruction(text string) (Session, error) {
+	if err := s.ConfigLoadError(); err != nil {
+		return Session{}, err
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Session{}, ErrEmptyMessage
@@ -1209,13 +1257,15 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	s.reloadStateFileIfChangedLocked()
 	s.dirty = true
 	now := time.Now().UTC()
+	cfg := cloneEffectiveConfig(s.config)
 	userMsg := SessionMessage{
-		ID:        s.nextID("cmsg"),
-		From:      "human",
-		To:        s.controller.ID,
-		Direction: "instruction",
-		Text:      text,
-		CreatedAt: now,
+		AppliedConfig: &cfg,
+		ID:            s.nextID("cmsg"),
+		From:          "human",
+		To:            s.controller.ID,
+		Direction:     "instruction",
+		Text:          text,
+		CreatedAt:     now,
 	}
 	s.controller.Messages = append(s.controller.Messages, userMsg)
 	s.controller.ActiveTask = text
