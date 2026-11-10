@@ -42,19 +42,18 @@ func NewHandler(svc *Service) http.Handler {
 		defer cancel()
 
 		sendSnap := func(snap Snapshot) error {
-			data, err := json.Marshal(snap)
-			if err != nil {
-				return err
+			data, marshalErr := json.Marshal(snap)
+			if marshalErr != nil {
+				return marshalErr
 			}
-			_, err = fmt.Fprintf(w, "data: %s\n\n", data)
-			if err != nil {
-				return err
+			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", data); writeErr != nil {
+				return writeErr
 			}
 			flusher.Flush()
 			return nil
 		}
 
-		if err := sendSnap(svc.Snapshot()); err != nil {
+		if sendErr := sendSnap(svc.Snapshot()); sendErr != nil {
 			return
 		}
 
@@ -69,7 +68,7 @@ func NewHandler(svc *Service) http.Handler {
 				if !ok {
 					return
 				}
-				if err := sendSnap(snap); err != nil {
+				if sendErr := sendSnap(snap); sendErr != nil {
 					return
 				}
 			case <-ticker.C:
@@ -80,45 +79,45 @@ func NewHandler(svc *Service) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/prs/{number}", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
-		pr, err := svc.GetPR(num)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, getErr := svc.GetPR(num)
+		if getErr != nil {
+			writeServiceError(w, getErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/messages", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Author string `json:"author"`
 			Text   string `json:"text"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.SendPRMessage(num, body.Author, body.Text)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, sendErr := svc.SendPRMessage(num, body.Author, body.Text)
+		if sendErr != nil {
+			writeServiceError(w, sendErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/sbnn-comment", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
@@ -126,134 +125,134 @@ func NewHandler(svc *Service) http.Handler {
 			Line     int    `json:"line"`
 			Body     string `json:"body"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.PostSBNNComment(r.Context(), num, body.FilePath, body.Line, body.Body)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, postErr := svc.PostSBNNComment(r.Context(), num, body.FilePath, body.Line, body.Body)
+		if postErr != nil {
+			writeServiceError(w, postErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/request-review", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Focus string `json:"focus"`
 		}
 		_ = decodeJSON(r, &body)
-		pr, err := svc.RequestReview(r.Context(), num, body.Focus)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, reqErr := svc.RequestReview(r.Context(), num, body.Focus)
+		if reqErr != nil {
+			writeServiceError(w, reqErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/address-review", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Instruction string `json:"instruction"`
 		}
 		_ = decodeJSON(r, &body)
-		pr, err := svc.AddressReview(num, body.Instruction)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, addrErr := svc.AddressReview(num, body.Instruction)
+		if addrErr != nil {
+			writeServiceError(w, addrErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/routine", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Action RoutineAction `json:"action"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.RunRoutineAction(num, body.Action)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, runErr := svc.RunRoutineAction(num, body.Action)
+		if runErr != nil {
+			writeServiceError(w, runErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/auto-mode", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Enabled bool `json:"enabled"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.SetAutoMode(num, body.Enabled)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, modeErr := svc.SetAutoMode(num, body.Enabled)
+		if modeErr != nil {
+			writeServiceError(w, modeErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/status", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Status  PRStatus `json:"status"`
 			Summary string   `json:"summary"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.SetPRStatus(num, body.Status, body.Summary)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, statErr := svc.SetPRStatus(num, body.Status, body.Summary)
+		if statErr != nil {
+			writeServiceError(w, statErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
 	})
 
 	mux.HandleFunc("POST /api/prs/{number}/model-tier", func(w http.ResponseWriter, r *http.Request) {
-		num, err := parsePRNumber(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		num, parseErr := parsePRNumber(r)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr)
 			return
 		}
 		var body struct {
 			Tier ModelTier `json:"tier"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.SetPRModelTier(num, body.Tier)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, tierErr := svc.SetPRModelTier(num, body.Tier)
+		if tierErr != nil {
+			writeServiceError(w, tierErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
@@ -264,13 +263,13 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Text string `json:"text"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		sess, err := svc.SendDirectSessionInstruction(id, body.Text)
-		if err != nil {
-			writeServiceError(w, err)
+		sess, instErr := svc.SendDirectSessionInstruction(id, body.Text)
+		if instErr != nil {
+			writeServiceError(w, instErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, sess)
@@ -282,13 +281,13 @@ func NewHandler(svc *Service) http.Handler {
 			Tier         ModelTier `json:"tier"`
 			SubagentTier ModelTier `json:"subagent_tier"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		sess, err := svc.SetSessionModelTier(id, body.Tier, body.SubagentTier)
-		if err != nil {
-			writeServiceError(w, err)
+		sess, tierErr := svc.SetSessionModelTier(id, body.Tier, body.SubagentTier)
+		if tierErr != nil {
+			writeServiceError(w, tierErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, sess)
@@ -301,13 +300,13 @@ func NewHandler(svc *Service) http.Handler {
 			Status   PRStatus `json:"status"`
 			Report   string   `json:"report"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		pr, err := svc.ReportSessionResult(id, body.PRNumber, body.Status, body.Report)
-		if err != nil {
-			writeServiceError(w, err)
+		pr, repErr := svc.ReportSessionResult(id, body.PRNumber, body.Status, body.Report)
+		if repErr != nil {
+			writeServiceError(w, repErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, pr)
@@ -317,13 +316,13 @@ func NewHandler(svc *Service) http.Handler {
 		var body struct {
 			Text string `json:"text"`
 		}
-		if err := decodeJSON(r, &body); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &body); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		sess, err := svc.SendControllerInstruction(body.Text)
-		if err != nil {
-			writeServiceError(w, err)
+		sess, instErr := svc.SendControllerInstruction(body.Text)
+		if instErr != nil {
+			writeServiceError(w, instErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, sess)
@@ -331,13 +330,13 @@ func NewHandler(svc *Service) http.Handler {
 
 	mux.HandleFunc("POST /api/models", func(w http.ResponseWriter, r *http.Request) {
 		var cfg ModelPresetConfig
-		if err := decodeJSON(r, &cfg); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &cfg); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		updated, err := svc.UpdateModelConfig(cfg)
-		if err != nil {
-			writeServiceError(w, err)
+		updated, updErr := svc.UpdateModelConfig(cfg)
+		if updErr != nil {
+			writeServiceError(w, updErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, updated)
@@ -348,8 +347,8 @@ func NewHandler(svc *Service) http.Handler {
 			ID string `json:"id"`
 		}
 		_ = decodeJSON(r, &body)
-		if err := svc.MarkNotificationRead(body.ID); err != nil {
-			writeServiceError(w, err)
+		if readErr := svc.MarkNotificationRead(body.ID); readErr != nil {
+			writeServiceError(w, readErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -357,13 +356,13 @@ func NewHandler(svc *Service) http.Handler {
 
 	mux.HandleFunc("POST /api/worktrees", func(w http.ResponseWriter, r *http.Request) {
 		var wt Worktree
-		if err := decodeJSON(r, &wt); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &wt); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		updated, err := svc.UpsertWorktree(wt)
-		if err != nil {
-			writeServiceError(w, err)
+		updated, upErr := svc.UpsertWorktree(wt)
+		if upErr != nil {
+			writeServiceError(w, upErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, updated)
@@ -371,13 +370,13 @@ func NewHandler(svc *Service) http.Handler {
 
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var sess Session
-		if err := decodeJSON(r, &sess); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &sess); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		updated, err := svc.UpsertSession(sess)
-		if err != nil {
-			writeServiceError(w, err)
+		updated, upErr := svc.UpsertSession(sess)
+		if upErr != nil {
+			writeServiceError(w, upErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, updated)
@@ -385,13 +384,13 @@ func NewHandler(svc *Service) http.Handler {
 
 	mux.HandleFunc("POST /api/prs", func(w http.ResponseWriter, r *http.Request) {
 		var pr PullRequest
-		if err := decodeJSON(r, &pr); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if decErr := decodeJSON(r, &pr); decErr != nil {
+			writeError(w, http.StatusBadRequest, decErr)
 			return
 		}
-		updated, err := svc.UpsertPR(pr)
-		if err != nil {
-			writeServiceError(w, err)
+		updated, upErr := svc.UpsertPR(pr)
+		if upErr != nil {
+			writeServiceError(w, upErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, updated)

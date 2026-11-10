@@ -2,6 +2,7 @@ package prdash
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func NewStubSBNNClient() *StubSBNNClient {
 func (s *StubSBNNClient) SubmitComment(_ context.Context, req SBNNCommentRequest) (SBNNCommentResult, error) {
 	body := strings.TrimSpace(req.Body)
 	if body == "" {
-		return SBNNCommentResult{}, fmt.Errorf("sbnn comment body is required")
+		return SBNNCommentResult{}, errors.New("sbnn comment body is required")
 	}
 
 	location := "PR-level"

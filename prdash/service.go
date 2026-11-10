@@ -213,7 +213,7 @@ func clonePR(in PullRequest) PullRequest {
 }
 
 func buildStackGroups(prs []PullRequest) []StackGroup {
-	var groups []StackGroup
+	groups := make([]StackGroup, 0, len(prs))
 	stackIndex := make(map[string]int)
 
 	stackTitles := map[string]string{
@@ -344,7 +344,7 @@ func (s *Service) ListPRs(statusFilter string, stackID string) []PullRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reloadStateFileIfChangedLocked()
-	var out []PullRequest
+	out := make([]PullRequest, 0, len(s.prs))
 	for _, pr := range s.prs {
 		if statusFilter != "" && string(pr.Status) != statusFilter {
 			continue
@@ -1120,8 +1120,8 @@ func (s *Service) SendControllerInstruction(text string) (Session, error) {
 	s.controller.Messages = append(s.controller.Messages, userMsg)
 	s.controller.ActiveTask = "Executing dashboard instruction: " + text
 
-	var waitingNums []string
-	var workingNums []string
+	waitingNums := make([]string, 0, len(s.prs))
+	workingNums := make([]string, 0, len(s.prs))
 	for _, pr := range s.prs {
 		if pr.Status == StatusWaitingForHuman {
 			waitingNums = append(waitingNums, fmt.Sprintf("#%d", pr.Number))

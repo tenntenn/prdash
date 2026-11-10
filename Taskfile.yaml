@@ -31,15 +31,17 @@ tasks:
       - aqua exec -- goimports -local {{.MODULE}} -w '{{.ROOT_DIR}}'
 
   fix:
-    desc: Apply go fix and format source files
+    desc: Apply go fix (+ gokuigan) and format source files
     cmds:
       - aqua exec -- go fix {{.MODULE}}/...
+      - bash -c 'if command -v gokuigan >/dev/null 2>&1; then aqua exec -- go fix -fixtool="$(command -v gokuigan)" {{.MODULE}}/...; fi'
       - task: fmt
 
   lint:
-    desc: Run go vet static analysis
+    desc: Run go vet and gokuigan static analysis
     cmds:
       - aqua exec -- go vet {{.MODULE}}/...
+      - bash -c 'if command -v gokuigan >/dev/null 2>&1; then aqua exec -- go vet -vettool="$(command -v gokuigan)" {{.MODULE}}/...; fi'
 
   test:
     desc: Format and run tests with race detector enabled
