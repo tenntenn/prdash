@@ -610,6 +610,7 @@ input[type="number"] {
 
 .instruction-form {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -855,4 +856,10 @@ input[type="number"] {
   display: flex;
   justify-content: flex-end;
   margin-top: 4px;
+}
+
+.draft-error {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 12px;
 }
