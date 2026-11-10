@@ -5,16 +5,56 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tenntenn/prdash/prdash"
 )
 
+func TestWriteSyntheticStateForDocs(t *testing.T) {
+	path := os.Getenv("PRDASH_WRITE_SYNTHETIC_STATE")
+	if path == "" {
+		t.Skip("PRDASH_WRITE_SYNTHETIC_STATE not set")
+	}
+	svc := prdash.NewService(prdash.Options{
+		Repository: "acme/nebula-api",
+		StateFile:  path,
+		Reviewer:   prdash.NewStubSBNNClient(),
+	})
+	svc.SeedSynthetic()
+}
+
+func newSeededService(t *testing.T) *prdash.Service {
+	t.Helper()
+	svc := prdash.NewService(prdash.Options{
+		Repository: "acme/nebula-api",
+		Reviewer:   prdash.NewStubSBNNClient(),
+	})
+	svc.SeedSynthetic()
+	return svc
+}
+
+func TestEmptyDefaultService(t *testing.T) {
+	t.Parallel()
+
+	svc := prdash.NewService(prdash.Options{Repository: "owner/repo"})
+	snap := svc.Snapshot()
+
+	if snap.Repository.FullName != "owner/repo" {
+		t.Fatalf("unexpected repository full_name: %s", snap.Repository.FullName)
+	}
+	if len(snap.Sessions) != 0 || len(snap.Worktrees) != 0 || len(snap.PullRequests) != 0 {
+		t.Fatalf("expected empty initial state without demo data, got sessions=%d worktrees=%d prs=%d",
+			len(snap.Sessions), len(snap.Worktrees), len(snap.PullRequests))
+	}
+}
+
 func TestInitialSnapshot(t *testing.T) {
 	t.Parallel()
 
-	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+	svc := newSeededService(t)
 	snap := svc.Snapshot()
 
 	if snap.Repository.FullName != "acme/nebula-api" {
@@ -47,7 +87,62 @@ func TestInitialSnapshot(t *testing.T) {
 	}
 }
 
-func TestSendPRMessage(t *testing.T) {
+func TestDiscoveryParsersAndStackInference(t *testing.T) {
+	t.Parallel()
+
+	remoteCases := []struct {
+		raw      string
+		wantFull string
+	}{
+		{"https://github.com/example/sample-repo.git", "example/sample-repo"},
+		{"git@github.com:example/sample-repo.git", "example/sample-repo"},
+		{"ssh://git@github.com/example/sample-repo", "example/sample-repo"},
+	}
+	for _, tc := range remoteCases {
+		got := prdash.ParseGitRemoteURL(tc.raw)
+		if got.FullName != tc.wantFull {
+			t.Fatalf("ParseGitRemoteURL(%q) = %q, want %q", tc.raw, got.FullName, tc.wantFull)
+		}
+	}
+
+	porcelain := strings.Join([]string{
+		"worktree /workspace/sample",
+		"HEAD a1b2c3d4e5f6",
+		"branch refs/heads/main",
+		"",
+		"worktree /workspace/sample-wt-auth",
+		"HEAD 9876543210ab",
+		"branch refs/heads/feat/auth-step1",
+	}, "\n")
+	wts := prdash.ParseGitWorktreePorcelain(porcelain)
+	if len(wts) != 2 {
+		t.Fatalf("expected 2 worktrees, got %d", len(wts))
+	}
+	if wts[1].Branch != "feat/auth-step1" || wts[1].HeadSHA != "9876543" {
+		t.Fatalf("unexpected parsed worktree: %+v", wts[1])
+	}
+	wts[1].SessionID = "sess-auth"
+
+	ghJSON := `[
+		{"number":202,"title":"sample-stack-2","body":"step 2","headRefName":"feat/auth-step2","baseRefName":"feat/auth-step1","additions":40,"deletions":5,"changedFiles":2,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","statusCheckRollup":[{"state":"SUCCESS"}]},
+		{"number":201,"title":"sample-stack-1","body":"step 1","headRefName":"feat/auth-step1","baseRefName":"main","additions":80,"deletions":10,"changedFiles":3,"mergeable":"CONFLICTING","reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"state":"FAILURE"}]}
+	]`
+	prs, err := prdash.ParseGitHubPRListJSON([]byte(ghJSON), "main", wts, prdash.DefaultModelPresetConfig())
+	if err != nil {
+		t.Fatalf("ParseGitHubPRListJSON: %v", err)
+	}
+	if len(prs) != 2 {
+		t.Fatalf("expected 2 PRs, got %d", len(prs))
+	}
+	if prs[0].Number != 201 || prs[0].StackOrder != 1 || prs[0].StackSize != 2 || !prs[0].HasConflicts || prs[0].CIStatus != "failing" || prs[0].SessionID != "sess-auth" {
+		t.Fatalf("unexpected root stack PR: %+v", prs[0])
+	}
+	if prs[1].Number != 202 || prs[1].StackOrder != 2 || prs[1].ParentPRNumber != 201 || prs[1].ReviewStatus != "approved" {
+		t.Fatalf("unexpected child stack PR: %+v", prs[1])
+	}
+}
+
+func TestSendPRMessageQueuesTaskForSession(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -57,8 +152,8 @@ func TestSendPRMessage(t *testing.T) {
 		expectedStatus prdash.PRStatus
 		wantErr        bool
 	}{
-		{"auto-mode PR completes instruction and waits for human", 102, "sample-instruction-1", prdash.StatusWaitingForHuman, false},
-		{"manual-mode PR enters working state", 103, "sample-instruction-2", prdash.StatusWorking, false},
+		{"sending message queues task and enters working state", 101, "sample-instruction-1", prdash.StatusWorking, false},
+		{"sending message on manual-mode PR enters working state", 103, "sample-instruction-2", prdash.StatusWorking, false},
 		{"empty message returns error", 101, "   ", "", true},
 		{"unknown PR returns error", 999, "sample-instruction-3", "", true},
 	}
@@ -66,7 +161,7 @@ func TestSendPRMessage(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+			svc := newSeededService(t)
 			updated, err := svc.SendPRMessage(tc.prNumber, "sample-author", tc.text)
 			if tc.wantErr {
 				if err == nil {
@@ -80,31 +175,33 @@ func TestSendPRMessage(t *testing.T) {
 			if updated.Status != tc.expectedStatus {
 				t.Fatalf("expected status %s, got %s", tc.expectedStatus, updated.Status)
 			}
+			pending := svc.PendingInstructions(updated.SessionID)
+			if len(pending) == 0 || pending[len(pending)-1].Text != tc.text {
+				t.Fatalf("expected instruction %q queued on session %s, got %+v", tc.text, updated.SessionID, pending)
+			}
 		})
 	}
 }
 
-func TestRoutineActions(t *testing.T) {
+func TestRoutineActionsQueueWorkUntilSessionReportsResult(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name          string
-		prNumber      int
-		action        prdash.RoutineAction
-		wantConflicts bool
-		wantCIStatus  string
-		wantErr       bool
+		name     string
+		prNumber int
+		action   prdash.RoutineAction
+		wantErr  bool
 	}{
-		{"resolve conflicts clears conflict flag", 107, prdash.ActionResolveConflicts, false, "passing", false},
-		{"fix CI transitions failing CI to passing", 109, prdash.ActionFixCI, false, "passing", false},
-		{"rebase stack updates stacked chain", 102, prdash.ActionRebaseStack, false, "passing", false},
-		{"invalid routine action fails", 101, prdash.RoutineAction("unknown_action"), false, "", true},
+		{"resolve conflicts queues routine instruction", 107, prdash.ActionResolveConflicts, false},
+		{"fix CI queues routine instruction", 109, prdash.ActionFixCI, false},
+		{"rebase stack queues routine instruction", 102, prdash.ActionRebaseStack, false},
+		{"invalid routine action fails", 101, prdash.RoutineAction("unknown_action"), true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+			svc := newSeededService(t)
 			pr, err := svc.RunRoutineAction(tc.prNumber, tc.action)
 			if tc.wantErr {
 				if err == nil {
@@ -115,14 +212,16 @@ func TestRoutineActions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if pr.HasConflicts != tc.wantConflicts {
-				t.Fatalf("expected HasConflicts=%v, got %v", tc.wantConflicts, pr.HasConflicts)
+			if pr.Status != prdash.StatusWorking {
+				t.Fatalf("expected status %s while session executes routine action, got %s", prdash.StatusWorking, pr.Status)
 			}
-			if pr.CIStatus != tc.wantCIStatus {
-				t.Fatalf("expected CIStatus=%s, got %s", tc.wantCIStatus, pr.CIStatus)
+
+			completed, err := svc.ReportSessionResult(pr.SessionID, tc.prNumber, prdash.StatusWaitingForHuman, "sample-routine-complete")
+			if err != nil {
+				t.Fatalf("ReportSessionResult: %v", err)
 			}
-			if pr.Status != prdash.StatusWaitingForHuman {
-				t.Fatalf("expected status %s, got %s", prdash.StatusWaitingForHuman, pr.Status)
+			if completed.Status != prdash.StatusWaitingForHuman || completed.HasConflicts || completed.CIStatus != "passing" {
+				t.Fatalf("unexpected PR state after session report: %+v", completed)
 			}
 		})
 	}
@@ -148,7 +247,7 @@ func TestModelTierPresets(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+			svc := newSeededService(t)
 			sess, err := svc.SetSessionModelTier(tc.sessionID, tc.tier, tc.subagentTier)
 			if tc.wantErr {
 				if err == nil {
@@ -170,7 +269,7 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+	svc := newSeededService(t)
 
 	beforeNotifs := len(svc.Snapshot().Notifications)
 
@@ -186,11 +285,11 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddressReview failed: %v", err)
 	}
-	if pr.ReviewStatus != "approved" || pr.Status != prdash.StatusWaitingForHuman {
-		t.Fatalf("expected approved & waiting_for_human, got %s / %s", pr.ReviewStatus, pr.Status)
+	if pr.Status != prdash.StatusWorking {
+		t.Fatalf("expected working while session addresses review, got %s", pr.Status)
 	}
 
-	pr, err = svc.ReportSessionResult("sess-beta", 105, prdash.StatusWaitingForHuman, "sample-session-report")
+	pr, err = svc.ReportSessionResult("sess-alpha", 103, prdash.StatusWaitingForHuman, "sample-review-fixed")
 	if err != nil {
 		t.Fatalf("ReportSessionResult failed: %v", err)
 	}
@@ -204,10 +303,49 @@ func TestSBNNReviewAndInterSessionNotification(t *testing.T) {
 	}
 }
 
+func TestCLISBNNClient(t *testing.T) {
+	t.Parallel()
+
+	binDir := t.TempDir()
+	fakeSBNN := filepath.Join(binDir, "fake-sbnn")
+	script := "#!/bin/sh\nif [ \"$1\" = \"comments\" ]; then\n  echo '[{\"id\":\"c1\",\"path\":\"main.go\",\"startLine\":12,\"body\":\"sample-finding\",\"resolved\":false}]'\n  exit 1\nfi\nexit 0\n"
+	if err := os.WriteFile(fakeSBNN, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile fake-sbnn: %v", err)
+	}
+
+	client := prdash.NewCLISBNNClient(fakeSBNN, binDir)
+	cmtRes, err := client.SubmitComment(t.Context(), prdash.SBNNCommentRequest{
+		Repository: "example/sample",
+		PRNumber:   42,
+		FilePath:   "main.go",
+		Line:       12,
+		Body:       "sample-comment",
+	})
+	if err != nil {
+		t.Fatalf("SubmitComment: %v", err)
+	}
+	if !strings.Contains(cmtRes.Formatted, "main.go:12") {
+		t.Fatalf("unexpected formatted comment: %s", cmtRes.Formatted)
+	}
+
+	revRes, err := client.RunReview(t.Context(), prdash.SBNNReviewRequest{
+		Repository: "example/sample",
+		PRNumber:   42,
+		BaseBranch: "main",
+		Branch:     "feat/sample",
+	})
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if len(revRes.Findings) != 1 || !strings.Contains(revRes.Findings[0], "sample-finding") {
+		t.Fatalf("unexpected review findings: %+v", revRes.Findings)
+	}
+}
+
 func TestHTTPHandler(t *testing.T) {
 	t.Parallel()
 
-	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+	svc := newSeededService(t)
 	srv := httptest.NewServer(prdash.NewHandler(svc))
 	defer srv.Close()
 
@@ -220,6 +358,7 @@ func TestHTTPHandler(t *testing.T) {
 	}{
 		{"serve index html", http.MethodGet, "/", "", http.StatusOK},
 		{"get dashboard state", http.MethodGet, "/api/state", "", http.StatusOK},
+		{"list pending instructions", http.MethodGet, "/api/sessions/sess-alpha/instructions", "", http.StatusOK},
 		{"send PR message", http.MethodPost, "/api/prs/102/messages", `{"author":"sample-author","text":"sample-message"}`, http.StatusOK},
 		{"post sbnn comment", http.MethodPost, "/api/prs/101/sbnn-comment", `{"file_path":"internal/auth/pkce.go","line":50,"body":"sample-comment"}`, http.StatusOK},
 		{"send controller instruction", http.MethodPost, "/api/controller/instruction", `{"text":"sample-instruction"}`, http.StatusOK},
@@ -249,12 +388,13 @@ func TestHTTPHandler(t *testing.T) {
 func TestMCPServer(t *testing.T) {
 	t.Parallel()
 
-	svc := prdash.NewService(prdash.Options{Repository: "acme/nebula-api"})
+	svc := newSeededService(t)
 	input := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_routine_action","arguments":{"pr_number":107,"action":"resolve_conflicts"}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"set_model_tier","arguments":{"pr_number":108,"tier":"pine"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"report_session_result","arguments":{"session_id":"sess-gamma","pr_number":107,"status":"waiting_for_human","report":"sample-conflict-resolved"}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_model_tier","arguments":{"pr_number":108,"tier":"pine"}}}`,
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -263,8 +403,8 @@ func TestMCPServer(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 JSON-RPC responses, got %d: %s", len(lines), out.String())
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 JSON-RPC responses, got %d: %s", len(lines), out.String())
 	}
 
 	for i, line := range lines {
@@ -281,8 +421,8 @@ func TestMCPServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPR(107): %v", err)
 	}
-	if pr107.HasConflicts {
-		t.Fatal("expected PR #107 conflicts to be resolved via MCP tool call")
+	if pr107.HasConflicts || pr107.Status != prdash.StatusWaitingForHuman {
+		t.Fatalf("expected PR #107 conflicts to be resolved after session report, got %+v", pr107)
 	}
 }
 
@@ -293,10 +433,13 @@ func TestStateFileSynchronization(t *testing.T) {
 	webSvc := prdash.NewService(prdash.Options{
 		Repository: "acme/nebula-api",
 		StateFile:  statePath,
+		Reviewer:   prdash.NewStubSBNNClient(),
 	})
+	webSvc.SeedSynthetic()
 	mcpSvc := prdash.NewService(prdash.Options{
 		Repository: "acme/nebula-api",
 		StateFile:  statePath,
+		Reviewer:   prdash.NewStubSBNNClient(),
 	})
 
 	if _, err := mcpSvc.ReportSessionResult("sess-delta", 109, prdash.StatusWaitingForHuman, "sample-sync-report"); err != nil {

@@ -473,6 +473,18 @@
       return;
     }
 
+    if (e.target.id === "sync-repo-btn") {
+      e.target.disabled = true;
+      e.target.textContent = "Syncing...";
+      try {
+        await apiPost("/api/sync", {});
+      } finally {
+        e.target.disabled = false;
+        e.target.textContent = "Sync GitHub & Worktrees";
+      }
+      return;
+    }
+
     if (e.target.id === "enable-desktop-alerts") {
       if ("Notification" in window && Notification.permission !== "granted") {
         try {

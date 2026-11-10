@@ -28,6 +28,24 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, svc.Snapshot())
 	})
 
+	mux.HandleFunc("POST /api/sync", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Dir string `json:"dir"`
+		}
+		_ = decodeJSON(r, &body)
+		snap, syncErr := svc.SyncRepository(r.Context(), body.Dir)
+		if syncErr != nil {
+			writeServiceError(w, syncErr)
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+	})
+
+	mux.HandleFunc("GET /api/sessions/{id}/instructions", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		writeJSON(w, http.StatusOK, svc.PendingInstructions(id))
+	})
+
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {

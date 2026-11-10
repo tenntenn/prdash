@@ -42,7 +42,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	var (
 		addr        = fs.String("addr", "127.0.0.1:0", "HTTP listen address (defaults to an automatically assigned free port)")
-		repo        = fs.String("repo", "acme/nebula-api", "Target repository in owner/name format")
+		repo        = fs.String("repo", "", "Target repository in owner/name format (auto-detected from git remote if omitted)")
+		workDir     = fs.String("dir", "", "Target git repository directory (defaults to current working directory)")
+		noSync      = fs.Bool("no-sync", false, "Skip automatic git worktree and GitHub PR discovery on startup")
 		stateFile   = fs.String("state", "", "Optional JSON file path to synchronize state between Web and MCP processes")
 		mcpMode     = fs.Bool("mcp", false, "Run as a Model Context Protocol (MCP) server over stdio")
 		pineModel   = fs.String("model-pine", "claude-opus-4-6", "Model identifier for the Pine (High) preset")
@@ -64,6 +66,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	svc := prdash.NewService(prdash.Options{
 		Repository: *repo,
+		WorkDir:    *workDir,
 		StateFile:  *stateFile,
 		ModelConfig: &prdash.ModelPresetConfig{
 			Pine:   *pineModel,
@@ -71,6 +74,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Plum:   *plumModel,
 		},
 	})
+	if !*noSync && len(svc.Snapshot().PullRequests) == 0 {
+		_, _ = svc.SyncRepository(ctx, *workDir)
+	}
 
 	if *mcpMode {
 		if err := prdash.RunMCP(ctx, svc, stdin, stdout); err != nil && !errors.Is(err, context.Canceled) {
