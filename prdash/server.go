@@ -196,6 +196,24 @@ func NewHandler(svc *Service) http.Handler {
 		writeJSON(w, http.StatusOK, pr)
 	})
 
+	mux.HandleFunc("POST /api/prs/{number}/response-preview", func(w http.ResponseWriter, r *http.Request) {
+		number, err := parsePRNumber(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		var request ResponseRequest
+		if err := decodeJSON(r, &request); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		plan, err := svc.PreviewResponseWorkflow(number, request)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+	})
 	mux.HandleFunc("POST /api/prs/{number}/address-review", func(w http.ResponseWriter, r *http.Request) {
 		num, parseErr := parsePRNumber(r)
 		if parseErr != nil {
@@ -468,7 +486,7 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrConfigValidation):
+	case errors.Is(err, ErrConfigValidation), errors.Is(err, ErrResponsePolicyConflict), errors.Is(err, ErrResponseTransition):
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, ErrInstructionNotFound), errors.Is(err, ErrPRNotFound), errors.Is(err, ErrSessionNotFound), errors.Is(err, ErrNotificationNotFound):
 		writeError(w, http.StatusNotFound, err)

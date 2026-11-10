@@ -49,12 +49,14 @@ type FindingPolicies struct {
 	Question string `json:"question" yaml:"question"`
 }
 type RereviewConfig struct {
+	Gate      string `json:"gate" yaml:"gate"`
 	Agent     string `json:"agent,omitempty" yaml:"agent"`
 	Session   string `json:"session,omitempty" yaml:"session"`
 	MaxRounds int    `json:"max_rounds" yaml:"max_rounds"`
 	StopOn    string `json:"stop_on" yaml:"stop_on"`
 }
 type ReviewResponseConfig struct {
+	Steps            []string        `json:"steps" yaml:"steps"`
 	Agent            string          `json:"agent,omitempty" yaml:"agent"`
 	Session          string          `json:"session" yaml:"session"`
 	InstructionsFile string          `json:"instructions_file,omitempty" yaml:"instructions_file"`
@@ -89,9 +91,9 @@ type EffectiveConfig struct {
 
 func DefaultRepoConfig() RepoConfig {
 	return RepoConfig{Version: 1, Review: ReviewConfig{Agent: "sbnn", Session: "separate"}, ReviewResponse: ReviewResponseConfig{
-		Session: "working", Verify: []string{}, FindingPolicies: FindingPolicies{AI: "auto", Human: "prepare_reply", Question: "human_decide"},
+		Steps: []string{"fix", "test", "commit", "push", "reply", "resolve", "rereview"}, Session: "working", Verify: []string{}, FindingPolicies: FindingPolicies{AI: "auto", Human: "prepare_reply", Question: "human_decide"},
 		Fix: "auto", Test: "auto", Commit: "confirm", Push: "confirm", Reply: "confirm", Resolve: "confirm",
-		Rereview: RereviewConfig{MaxRounds: 1, StopOn: "approved"},
+		Rereview: RereviewConfig{Gate: "confirm", MaxRounds: 1, StopOn: "approved"},
 	}}
 }
 
@@ -372,6 +374,12 @@ func validateRepoConfig(file string, cfg RepoConfig, explicit map[string]*yaml.N
 	if rr.Commit == "off" && rr.Push == "auto" {
 		return fail("review_response.push", "automatic push contradicts commit: off")
 	}
+	if !slices.Contains([]string{"auto", "confirm", "off"}, rr.Rereview.Gate) {
+		return fail("review_response.rereview.gate", "expected auto, confirm, or off")
+	}
+	if err := validateResponseOrder(rr); err != nil {
+		return fail("review_response.steps", err.Error())
+	}
 	if rr.Rereview.MaxRounds < 0 || rr.Rereview.MaxRounds > 20 {
 		return fail("review_response.rereview.max_rounds", "must be between 0 and 20")
 	}
@@ -387,6 +395,7 @@ func validateRepoConfig(file string, cfg RepoConfig, explicit map[string]*yaml.N
 func cloneEffectiveConfig(in EffectiveConfig) EffectiveConfig {
 	out := in
 	out.Config.ReviewResponse.Verify = slices.Clone(in.Config.ReviewResponse.Verify)
+	out.Config.ReviewResponse.Steps = slices.Clone(in.Config.ReviewResponse.Steps)
 	out.DefaultedFields = slices.Clone(in.DefaultedFields)
 	out.Instructions = maps.Clone(in.Instructions)
 	return out
