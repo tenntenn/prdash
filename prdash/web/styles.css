@@ -856,3 +856,8 @@ input[type="number"] {
   justify-content: flex-end;
   margin-top: 4px;
 }
+
+.pr-search-field { display: grid; gap: 6px; margin-bottom: 14px; }
+.pr-search-field label { font-weight: 600; }
+.pr-search-field input { width: 100%; box-sizing: border-box; }
+.pr-search-field small { color: var(--text-muted); }

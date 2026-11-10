@@ -72,6 +72,11 @@
         </div>
       </div>
 
+      <div class="pr-search-field">
+        <label for="pr-search">Search pull requests</label>
+        <input id="pr-search" type="search" placeholder="Number, title, branch, worktree, or session" aria-describedby="pr-search-help">
+        <small id="pr-search-help">Case-insensitive. Each space-separated term must match a searchable field.</small>
+      </div>
       <div id="pr-list" class="pr-list"></div>
     </section>
 
@@ -183,6 +188,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js"></script>
+  <script src="/search.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>
