@@ -35,3 +35,16 @@ It is not a separate authentication boundary between local OS accounts.
 CLI commands that operate directly on the state file and stdio MCP do not use
 HTTP credentials.
 
+The `prdash instruction` CLI connects to the running server with `-server`:
+
+```sh
+prdash instruction ack -server "$PRDASH_URL" -session controller -id "$INSTRUCTION_ID"
+```
+
+It acquires an operation token automatically after the server's explicit
+pre-operation authentication rejection. An optional `PRDASH_API_TOKEN` supplies
+an existing token; missing or expired credentials are recovered using the same
+one-retry policy. This operation token is separate from the instruction's
+claim token (`PRDASH_CLAIM_TOKEN`), which authorizes reporting a claimed attempt.
+See the [instruction lifecycle](integrations.md#claim-and-report-an-individual-instruction) for the
+claim/result workflow.
