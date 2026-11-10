@@ -172,6 +172,20 @@ func dispatchMCPTool(ctx context.Context, svc *Service, name string, rawArgs jso
 	case "get_dashboard":
 		return svc.Snapshot(), nil
 
+	case "sync_repository":
+		var args struct {
+			Dir string `json:"dir"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		return svc.SyncRepository(ctx, args.Dir)
+
+	case "list_pending_instructions":
+		var args struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = json.Unmarshal(rawArgs, &args)
+		return svc.PendingInstructions(args.SessionID), nil
+
 	case "list_prs":
 		var args struct {
 			Status  string `json:"status"`
@@ -362,6 +376,26 @@ func mcpToolsList() []mcpTool {
 			Name:        "get_dashboard",
 			Description: "Get the complete prdash snapshot for the target repository, including pull requests, stacked chains, sessions, worktrees, model presets, and notifications.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			Name:        "sync_repository",
+			Description: "Discover local git worktrees (git worktree list) and open GitHub pull requests (gh pr list) and synchronize them into the dashboard.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"dir": map[string]any{"type": "string", "description": "Optional repository directory path"},
+				},
+			},
+		},
+		{
+			Name:        "list_pending_instructions",
+			Description: "List queued instructions for a worker session or the controller session.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{"type": "string", "description": "Optional session ID (or 'controller')"},
+				},
+			},
 		},
 		{
 			Name:        "list_prs",

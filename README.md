@@ -76,9 +76,14 @@ Because the skill itself documents this update procedure, you can also simply as
 ### Starting the Web Dashboard
 
 ```console
-$ prdash -repo owner/name
-$ prdash -repo owner/name -state /tmp/prdash-state.json
+$ prdash                                         # auto-detects current git repo, worktrees, and open GitHub PRs
+$ prdash -repo owner/name -state /tmp/state.json # explicit repository and shared state file
 ```
+
+On startup (and whenever **Sync GitHub & Worktrees** is clicked in the header or `sync_repository` is called via MCP), `prdash` automatically:
+1. Detects the repository (`owner/name`, default branch, local root) via `git`.
+2. Discovers local git worktrees via `git worktree list --porcelain` and checks working tree status.
+3. Fetches open pull requests from GitHub via `gh pr list`, binds them to matching worktrees by branch, and infers stacked PR chains (`Stack 1/N → 2/N → ...`) from `baseRefName` and `headRefName`.
 
 `prdash` binds an available local port and prints the dashboard URL:
 
@@ -119,7 +124,9 @@ $ prdash --version
 
 | Flag | Default | Description |
 | :--- | :--- | :--- |
-| `-repo` | `acme/nebula-api` | Target repository in `owner/name` format |
+| `-repo` | *(auto-detected)* | Target repository in `owner/name` format (detected from `git remote` if omitted) |
+| `-dir` | `.` | Local git repository directory to inspect |
+| `-no-sync` | `false` | Skip automatic `git worktree` and `gh pr list` discovery on startup |
 | `-addr` | `127.0.0.1:0` | HTTP listen address (`:0` selects a free port automatically) |
 | `-state` | *(in-memory)* | Optional JSON file path to persist and synchronize state between Web and MCP processes |
 | `-mcp` | `false` | Run as a JSON-RPC 2.0 Model Context Protocol (MCP) server over stdio |

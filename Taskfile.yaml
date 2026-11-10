@@ -76,12 +76,13 @@ tasks:
     cmds:
       - task: build
       - mkdir -p '{{.ROOT_DIR}}/docs/screenshots'
+      - PRDASH_WRITE_SYNTHETIC_STATE=/tmp/prdash-docs-state.json aqua exec -- go test -run TestWriteSyntheticStateForDocs {{.MODULE}}/prdash
       - >-
         bash -c '
           export XDG_RUNTIME_DIR=/tmp/prdash-browser-runtime
           export AGENT_BROWSER_ARGS="--no-sandbox"
           mkdir -p "$XDG_RUNTIME_DIR"
-          "{{.ROOT_DIR}}/prdash-bin" -addr 127.0.0.1:18765 -repo acme/nebula-api > /tmp/prdash-docs.log 2>&1 &
+          "{{.ROOT_DIR}}/prdash-bin" -addr 127.0.0.1:18765 -repo acme/nebula-api -state /tmp/prdash-docs-state.json > /tmp/prdash-docs.log 2>&1 &
           SRV_PID=$!
           trap "kill $SRV_PID 2>/dev/null || true; agent-browser --session prdash-docs close 2>/dev/null || true" EXIT
           for i in $(seq 1 50); do

@@ -85,6 +85,8 @@ prdash -mcp -repo owner/name -state /tmp/prdash-state.json
 | Tool | Purpose |
 | :--- | :--- |
 | `get_dashboard` | Retrieve the full repository snapshot (PRs, stacks, sessions, worktrees, model presets, notifications). |
+| `sync_repository` | Discover local git worktrees (`git worktree list`) and open GitHub pull requests (`gh pr list`) and synchronize them into the dashboard. |
+| `list_pending_instructions` | List queued instructions for a worker session or the controller session (`session_id`). |
 | `list_prs` | List pull requests filtered by `status` (`waiting_for_human` or `working`) or `stack_id`. |
 | `get_pr` | Inspect a single PR and its full session conversation thread. |
 | `upsert_worktree` | Register or update a git worktree bound to an agent session. |
